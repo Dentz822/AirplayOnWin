@@ -18,6 +18,8 @@ public class ServerTests : IAsyncLifetime
     private TcpClient _client = null!;
     private NetworkStream _stream = null!;
     private int _cseq;
+    private AirPlayConnection? _connection;
+    private readonly CollectingSink _sink = new();
 
     public async Task InitializeAsync()
     {
@@ -26,7 +28,8 @@ public class ServerTests : IAsyncLifetime
         _port = ((IPEndPoint)probe.LocalEndpoint).Port;
         probe.Stop();
 
-        var server = new RtspServer(_port, _ => new AirPlayConnection(_id, new ReceiverOptions(), _ => { }), _ => { });
+        var options = new ReceiverOptions { MirrorSinkFactory = () => _sink };
+        var server = new RtspServer(_port, conn => _connection = new AirPlayConnection(_id, options, conn, _ => { }), _ => { });
         _ = server.RunAsync(_cts.Token);
         await Task.Delay(100);
 
@@ -98,7 +101,9 @@ public class ServerTests : IAsyncLifetime
     }
 
     [Fact]
-    public async Task PairingAndFairPlayOverTcp()
+    public Task PairingAndFairPlayOverTcp() => PairAndFairPlay();
+
+    private async Task PairAndFairPlay()
     {
         var phone = new FakeIPhone();
         const string octet = "application/octet-stream";
@@ -126,4 +131,70 @@ public class ServerTests : IAsyncLifetime
         Assert.Equal(200, fp2.Status);
         Assert.Equal(32, fp2.Body.Length);
     }
+
+    private const string BinaryPlist = "application/x-apple-binary-plist";
+
+    [Fact]
+    public async Task FullSessionStreamsDecryptedVideo()
+    {
+        await PairAndFairPlay();
+
+        // Plays the iPhone's NTP responder: echo the request's transmit time as "originate".
+        using var ntpPeer = new UdpClient(new IPEndPoint(IPAddress.Loopback, 0));
+        var ntpRequest = ntpPeer.ReceiveAsync().ContinueWith(async t =>
+        {
+            var req = t.Result;
+            var reply = new byte[32];
+            reply[0] = 0x80; reply[1] = 0xd3; reply[3] = 0x07;
+            req.Buffer.AsSpan(24, 8).CopyTo(reply.AsSpan(8));
+            await ntpPeer.SendAsync(reply, req.RemoteEndPoint);
+            return req.Buffer;
+        }).Unwrap();
+
+        var setup1 = new NSDictionary
+        {
+            { "ekey", new NSData(Enumerable.Range(0, 72).Select(i => (byte)i).ToArray()) },
+            { "eiv", new NSData(new byte[16]) },
+            { "timingProtocol", new NSString("NTP") },
+            { "timingPort", new NSNumber(((IPEndPoint)ntpPeer.Client.LocalEndPoint!).Port) },
+            { "isScreenMirroringSession", new NSNumber(true) },
+        };
+        var r1 = await Send("SETUP", "rtsp://127.0.0.1/1", BinaryPlistWriter(setup1), BinaryPlist);
+        Assert.Equal(200, r1.Status);
+        var reply1 = (NSDictionary)PropertyListParser.Parse(r1.Body);
+        Assert.True(((NSNumber)reply1.ObjectForKey("timingPort")).ToInt() > 0);
+
+        var ntp = await ntpRequest.WaitAsync(TimeSpan.FromSeconds(5));
+        Assert.Equal((byte)0x80, ntp[0]);
+        Assert.Equal((byte)0xd2, ntp[1]);
+
+        const ulong streamId = 9876543210123456789UL;
+        var setup2 = new NSDictionary
+        {
+            { "streams", new NSArray(
+                new NSDictionary { { "type", new NSNumber(110) }, { "streamConnectionID", new NSNumber(unchecked((long)streamId)) } },
+                new NSDictionary { { "type", new NSNumber(96) }, { "ct", new NSNumber(8) }, { "controlPort", new NSNumber(0) } }) },
+        };
+        var r2 = await Send("SETUP", "rtsp://127.0.0.1/1", BinaryPlistWriter(setup2), BinaryPlist);
+        Assert.Equal(200, r2.Status);
+        var streams = ((NSArray)((NSDictionary)PropertyListParser.Parse(r2.Body)).ObjectForKey("streams"))
+            .OfType<NSDictionary>().ToDictionary(d => ((NSNumber)d.ObjectForKey("type")).ToInt());
+        var videoPort = ((NSNumber)streams[110].ObjectForKey("dataPort")).ToInt();
+        Assert.True(((NSNumber)streams[96].ObjectForKey("dataPort")).ToInt() > 0);
+
+        Assert.Equal(200, (await Send("RECORD", "rtsp://127.0.0.1/1")).Status);
+
+        using var phone = new FakeMirrorSender(_connection!.AesKey!, streamId);
+        await phone.ConnectAsync(videoPort);
+        await phone.SendCodecAsync(1290, 2796);
+        var expected = await phone.SendFrameAsync(1, FakeMirrorSender.Nal(0x65, 777));
+
+        var frame = _sink.Next();
+        Assert.True(frame.IsKeyFrame);
+        Assert.EndsWith(Convert.ToHexString(expected), Convert.ToHexString(frame.AnnexB));
+
+        Assert.Equal(200, (await Send("TEARDOWN", "rtsp://127.0.0.1/1")).Status);
+    }
+
+    private static byte[] BinaryPlistWriter(NSObject o) => BinaryPropertyListWriter.WriteToArray(o);
 }

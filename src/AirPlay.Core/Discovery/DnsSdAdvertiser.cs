@@ -12,6 +12,7 @@ public sealed class DnsSdAdvertiser : IDisposable
     private readonly string _serviceName;
     private readonly RegisterComplete _callback; // kept alive: native code holds a pointer to it
     private readonly TaskCompletionSource<uint> _registered = new(TaskCreationOptions.RunContinuationsAsynchronously);
+    private readonly TaskCompletionSource<uint> _deregistered = new(TaskCreationOptions.RunContinuationsAsynchronously);
     private IntPtr _instance;
     private IntPtr _request;
     private bool _disposed;
@@ -74,23 +75,29 @@ public sealed class DnsSdAdvertiser : IDisposable
 
     public string ServiceName => _serviceName;
 
+    // Windows calls this once when registration finishes and again when deregistration finishes.
     private void OnComplete(uint status, IntPtr context, IntPtr instance)
     {
         if (instance != IntPtr.Zero)
             DnsServiceFreeInstance(instance);
-        _registered.TrySetResult(status);
+        if (!_registered.TrySetResult(status))
+            _deregistered.TrySetResult(status);
     }
 
+    /// <summary>
+    /// Withdraws the service: Windows multicasts a "goodbye" (TTL 0) so iPhones drop it from
+    /// their list at once. If the process dies without this, iPhones keep showing it until
+    /// their cache expires.
+    /// </summary>
     public void Dispose()
     {
         if (_disposed) return;
         _disposed = true;
         if (_request != IntPtr.Zero)
         {
-            if (_registered.Task.IsCompletedSuccessfully && _registered.Task.Result == 0)
-                DnsServiceDeRegister(_request, IntPtr.Zero);
-            // Freeing right after deregistration would race the native callback; give it a moment.
-            Thread.Sleep(200);
+            var wasRegistered = _registered.Task.IsCompletedSuccessfully && _registered.Task.Result == 0;
+            if (wasRegistered && DnsServiceDeRegister(_request, IntPtr.Zero) == DNS_REQUEST_PENDING)
+                _deregistered.Task.Wait(TimeSpan.FromSeconds(2)); // the native side still uses _request until then
             Marshal.FreeHGlobal(_request);
             _request = IntPtr.Zero;
         }

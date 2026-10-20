@@ -11,7 +11,7 @@
 | 2 | RTSP 伺服器、`GET /info` | ✅ iPhone 15 Pro Max / iOS 26.6 實測通過 |
 | 3 | pair-setup / pair-verify | ✅ 實測通過 |
 | 4 | FairPlay（playfair.dll） | ✅ 實測通過（mode 2，解出 aeskey） |
-| 5 | 畫面串流接收與解密 | |
+| 5 | 時間同步（NTP）、畫面串流接收與解密、存成 .h264 | ✅ 待 iPhone 實機確認 |
 | 6 | FFmpeg 解碼並顯示在 WPF 視窗 | |
 | 7 | 聲音（AAC-ELD / ALAC） | |
 | 8 | 影音同步 | |
@@ -30,10 +30,11 @@
    dotnet run --project src\AirPlay.Cli
    dotnet run --project src\AirPlay.Cli -- --name "我的電腦"   # 自訂顯示名稱
    dotnet run --project src\AirPlay.Cli -- -v                  # 詳細記錄（標頭、plist 內容）
+   dotnet run --project src\AirPlay.Cli -- --no-record         # 不存錄影檔
    ```
 3. iPhone 和電腦連同一個 Wi-Fi，打開「控制中心 → 螢幕鏡像輸出」。
 
-每次執行都會在 `logs\` 產生 UTF-8 記錄檔。不要用 `| Tee-Object` 存記錄：Windows PowerShell 5.1 會把輸出當成 Big5 解讀，中文會變亂碼。
+每次執行都會在 `logs\` 產生 UTF-8 記錄檔；每次投影的畫面會存成 `recordings\mirror-*.h264`（可用 VLC、ffplay 播放）。不要用 `| Tee-Object` 存記錄：Windows PowerShell 5.1 會把輸出當成 Big5 解讀，中文會變亂碼。
 
 裝置身分（名稱、Device ID、Ed25519 金鑰）存在 `%LOCALAPPDATA%\WindowsAirplay\identity.json`。
 
@@ -54,8 +55,11 @@ src/AirPlay.Core/
   Pairing/PairingSession.cs     pair-setup / pair-verify（Ed25519 + X25519 + AES-CTR）
   FairPlay/FairPlaySession.cs   FairPlay 握手與 ekey 解密（呼叫 playfair.dll）
   Crypto/AesCtr.cs              連續的 AES-128-CTR（配對與畫面解密共用）
+  Timing/NtpClient.cs           與 iPhone 的 NTP 時間同步
+  Mirroring/MirrorStream.cs     畫面串流：接收、解密、AVCC 轉 Annex-B
+  Audio/AudioStream.cs          音訊串流（目前只開埠計數，第 7 階段解碼）
   AirPlayConnection.cs          每個 iPhone 連線的請求處理
-src/AirPlay.Cli/                開發用主控台程式
+src/AirPlay.Cli/                開發用主控台程式（含 .h264 錄影）
 native/playfair/                FairPlay C 程式（取自 UxPlay，GPL）；bin/playfair.dll 為預先編好的版本
 tests/AirPlay.Tests/            自動測試
 scripts/setup-firewall.ps1      防火牆設定

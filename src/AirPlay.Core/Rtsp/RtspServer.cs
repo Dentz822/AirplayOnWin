@@ -13,19 +13,28 @@ public sealed class RtspServer(int port, Func<RtspConnectionInfo, IRtspHandler> 
     {
         var listener = new TcpListener(IPAddress.Any, port);
         listener.Start();
+        var connections = new List<Task>();
         try
         {
             while (!ct.IsCancellationRequested)
             {
                 TcpClient client;
                 try { client = await listener.AcceptTcpClientAsync(ct); }
-                catch (OperationCanceledException) { return; }
-                _ = HandleAsync(client, ct);
+                catch (OperationCanceledException) { break; }
+                lock (connections)
+                {
+                    connections.RemoveAll(t => t.IsCompleted);
+                    connections.Add(HandleAsync(client, ct));
+                }
             }
         }
         finally
         {
             listener.Stop();
+            // Let open connections finish cleanup (e.g. close recording files) before returning.
+            Task[] pending;
+            lock (connections) pending = connections.ToArray();
+            await Task.WhenAny(Task.WhenAll(pending), Task.Delay(3000));
         }
     }
 

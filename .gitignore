@@ -489,3 +489,4 @@ native/playfair/obj/
 # run logs written by AirPlay.Cli
 logs/
 airplay-log.txt
+recordings/

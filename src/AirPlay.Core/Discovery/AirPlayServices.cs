@@ -95,7 +95,7 @@ public sealed class AirPlayServices : IDisposable
 
     public void Dispose()
     {
-        foreach (var a in _advertisers) a.Dispose();
+        Parallel.ForEach(_advertisers, a => a.Dispose());
         _advertisers.Clear();
     }
 }

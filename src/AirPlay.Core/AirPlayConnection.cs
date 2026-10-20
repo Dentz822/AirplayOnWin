@@ -1,9 +1,14 @@
+using System.Globalization;
 using System.Security.Cryptography;
+using System.Text;
+using AirPlay.Core.Audio;
 using AirPlay.Core.Discovery;
 using AirPlay.Core.FairPlay;
 using AirPlay.Core.Identity;
+using AirPlay.Core.Mirroring;
 using AirPlay.Core.Pairing;
 using AirPlay.Core.Rtsp;
+using AirPlay.Core.Timing;
 using Claunia.PropertyList;
 
 namespace AirPlay.Core;
@@ -16,36 +21,58 @@ public sealed class ReceiverOptions
     public int MaxFps { get; init; } = 30;
     /// <summary>Log headers and decoded plist bodies of every request.</summary>
     public bool Verbose { get; init; }
+    /// <summary>Creates a consumer for each mirroring session's video (null = discard).</summary>
+    public Func<IMirrorSink>? MirrorSinkFactory { get; init; }
+}
+
+/// <summary>Receives the decoded-ready H.264 of one mirroring session.</summary>
+public interface IMirrorSink : IDisposable
+{
+    void OnFormat(VideoFormat format);
+    void OnFrame(VideoFrame frame);
 }
 
 /// <summary>
-/// Handles the RTSP control connection of one iPhone: device info, pairing, FairPlay, then
-/// (from stage 5 on) SETUP/RECORD of the mirroring and audio streams.
+/// Handles the RTSP control connection of one iPhone: device info, pairing, FairPlay,
+/// SETUP of time sync + mirroring video + audio, and TEARDOWN.
 /// </summary>
-public sealed class AirPlayConnection : IRtspHandler
+public sealed class AirPlayConnection : IRtspHandler, IDisposable
 {
     private readonly DeviceIdentity _id;
     private readonly ReceiverOptions _options;
     private readonly Action<string> _log;
+    private readonly RtspConnectionInfo _connection;
     private readonly PairingSession _pairing;
     private readonly FairPlaySession _fairPlay = new();
 
-    /// <summary>16-byte AES key decrypted from SETUP's ekey (stage 4 result).</summary>
-    public byte[]? AesKey { get; private set; }
-    public byte[]? AesIv { get; private set; }
+    private NtpClient? _ntp;
+    private MirrorStream? _mirror;
+    private IMirrorSink? _sink;
+    private AudioStream? _audio;
 
-    public AirPlayConnection(DeviceIdentity id, ReceiverOptions options, Action<string> log)
+    /// <summary>Session AES key: FairPlay-decrypted ekey, hashed with the pairing secret.</summary>
+    public byte[]? AesKey { get; private set; }
+    /// <summary>AES-CBC IV for audio (stage 7).</summary>
+    public byte[]? AesIv { get; private set; }
+    public double Volume { get; private set; }
+
+    public AirPlayConnection(DeviceIdentity id, ReceiverOptions options, RtspConnectionInfo connection, Action<string> log)
     {
         _id = id;
         _options = options;
+        _connection = connection;
         _log = log;
         _pairing = new PairingSession(id);
     }
 
     public Task<RtspResponse> HandleAsync(RtspRequest req, CancellationToken ct)
     {
-        _log($"  >> {req.Method} {req.Uri}{(req.Body.Length > 0 ? $" ({req.Body.Length} bytes)" : "")}");
-        if (_options.Verbose) LogDetails(req);
+        var quiet = req.Uri == "/feedback"; // keep-alive every 2 s
+        if (!quiet || _options.Verbose)
+        {
+            _log($"  >> {req.Method} {req.Uri}{(req.Body.Length > 0 ? $" ({req.Body.Length} bytes)" : "")}");
+            if (_options.Verbose) LogDetails(req);
+        }
 
         var path = req.Uri.Split('?')[0];
         var response = (req.Method, path) switch
@@ -55,11 +82,17 @@ public sealed class AirPlayConnection : IRtspHandler
             ("POST", "/pair-setup") => PairSetup(req),
             ("POST", "/pair-verify") => PairVerify(req),
             ("POST", "/fp-setup") => FpSetup(req),
-            ("POST", "/feedback") => new RtspResponse(),       // keep-alive every ~2 s
+            ("POST", "/feedback") => new RtspResponse(),
             ("SETUP", _) => Setup(req),
-            ("GET_PARAMETER" or "SET_PARAMETER" or "RECORD" or "FLUSH" or "TEARDOWN", _) => new RtspResponse(),
+            ("RECORD", _) => Record(),
+            ("GET_PARAMETER", _) => GetParameter(req),
+            ("SET_PARAMETER", _) => SetParameter(req),
+            ("FLUSH", _) => new RtspResponse(),
+            ("TEARDOWN", _) => Teardown(req),
             _ => RtspResponse.Error(501, "Not Implemented"),
         };
+        if (req.Method != "RECORD" && req.Header("CSeq") is not null)
+            response.Headers.TryAdd("Audio-Jack-Status", "connected; type=digital");
         if (response.Status != 200) _log($"  << {response.Status} {response.Reason}");
         return Task.FromResult(response);
     }
@@ -197,28 +230,178 @@ public sealed class AirPlayConnection : IRtspHandler
         }
     }
 
-    // ---- SETUP (stage 5 will open the streams here) ----------------------------------------
+    // ---- SETUP ---------------------------------------------------------------------------
+    // Round 1 carries ekey/eiv + timingPort: decrypt the key, start NTP.
+    // Round 2 (and later) carries "streams": type 110 = mirroring video, type 96 = audio.
 
     private RtspResponse Setup(RtspRequest req)
     {
         if (!req.IsBinaryPlist || req.Body.Length == 0) return RtspResponse.Error(400, "Bad Request");
-        var plist = PropertyListParser.Parse(req.Body) as NSDictionary;
-        _log("     SETUP 內容:\n" + Indent(plist?.ToXmlPropertyList() ?? "(無法解析)"));
+        if (PropertyListParser.Parse(req.Body) is not NSDictionary plist) return RtspResponse.Error(400, "Bad Request");
+        var result = new NSDictionary();
 
-        if (plist?.ObjectForKey("ekey") is NSData ekey)
+        if (plist.ObjectForKey("ekey") is NSData ekey)
         {
             var key = _fairPlay.DecryptKey(ekey.Bytes);
             // With pairing, the effective key is SHA-512(aeskey | ecdh secret)[0..16].
-            AesKey = _pairing.SharedSecret is { } secret
-                ? SHA512.HashData([.. key, .. secret])[..16]
-                : key;
+            AesKey = _pairing.SharedSecret is { } secret ? SHA512.HashData([.. key, .. secret])[..16] : key;
             AesIv = (plist.ObjectForKey("eiv") as NSData)?.Bytes;
-            _log($"     FairPlay 解出金鑰 ✓ aeskey={Convert.ToHexString(key)} eiv={(AesIv is null ? "-" : Convert.ToHexString(AesIv))}");
+            _log($"     FairPlay 解出金鑰 ✓  來源: {plist.ObjectForKey("name")} ({plist.ObjectForKey("model")}, iOS {plist.ObjectForKey("osVersion")})");
+
+            if (plist.ObjectForKey("timingPort") is NSNumber timingPort)
+            {
+                _ntp?.Dispose();
+                _ntp = new NtpClient(_connection.Remote.Address, timingPort.ToInt(), _log);
+                _ntp.Start();
+                result.Add("timingPort", new NSNumber(_ntp.LocalPort));
+            }
+            result.Add("eventPort", new NSNumber(0)); // not used for mirroring
         }
 
-        // Streams are not implemented yet (stage 5): refuse so the iPhone stops cleanly.
-        return RtspResponse.Error(501, "Not Implemented");
+        if (plist.ObjectForKey("streams") is NSArray streams)
+        {
+            var replies = new NSArray();
+            foreach (var s in streams.OfType<NSDictionary>())
+            {
+                var type = (s.ObjectForKey("type") as NSNumber)?.ToInt() ?? -1;
+                switch (type)
+                {
+                    case 110:
+                        replies.Add(SetupMirror(s));
+                        break;
+                    case 96:
+                        replies.Add(SetupAudio(s));
+                        break;
+                    default:
+                        _log($"     ⚠ 不支援的串流類型 {type}");
+                        break;
+                }
+            }
+            result.Add("streams", replies);
+        }
+
+        return Plist(result);
     }
+
+    private NSDictionary SetupMirror(NSDictionary stream)
+    {
+        if (AesKey is null) throw new InvalidOperationException("mirroring SETUP before key exchange");
+        var connectionId = unchecked((ulong)((stream.ObjectForKey("streamConnectionID") as NSNumber)?.ToLong() ?? 0));
+
+        StopMirror();
+        _mirror = new MirrorStream(AesKey, connectionId, _log);
+        if (_options.MirrorSinkFactory is { } factory)
+        {
+            _sink = factory();
+            _mirror.FormatChanged += _sink.OnFormat;
+            _mirror.FrameReceived += _sink.OnFrame;
+        }
+        _mirror.Start();
+        _log($"     畫面串流準備好 (TCP {_mirror.Port})");
+
+        return new NSDictionary
+        {
+            { "type", new NSNumber(110) },
+            { "dataPort", new NSNumber(_mirror.Port) },
+        };
+    }
+
+    private NSDictionary SetupAudio(NSDictionary stream)
+    {
+        var ct = (stream.ObjectForKey("ct") as NSNumber)?.ToInt() ?? 0;
+        _audio?.Dispose();
+        _audio = new AudioStream(ct, _log);
+        _audio.Start();
+        _log($"     音訊串流準備好: {AudioStream.CodecName(ct)} (UDP {_audio.DataPort}/{_audio.ControlPort})，第 7 階段才會解碼");
+
+        return new NSDictionary
+        {
+            { "type", new NSNumber(96) },
+            { "dataPort", new NSNumber(_audio.DataPort) },
+            { "controlPort", new NSNumber(_audio.ControlPort) },
+        };
+    }
+
+    private static RtspResponse Record()
+    {
+        var r = new RtspResponse();
+        r.Headers["Audio-Latency"] = "0";
+        r.Headers["Audio-Jack-Status"] = "connected; type=analog";
+        return r;
+    }
+
+    // ---- parameters ------------------------------------------------------------------------
+
+    private RtspResponse GetParameter(RtspRequest req)
+    {
+        if (req.ContentType is null) return RtspResponse.Error(451, "Parameter not understood");
+        var r = new RtspResponse();
+        if (req.ContentType == "text/parameters" && Encoding.ASCII.GetString(req.Body).Contains("volume"))
+            r.SetBody(Encoding.ASCII.GetBytes($"volume: {Volume.ToString("F6", CultureInfo.InvariantCulture)}\r\n"), "text/parameters");
+        return r;
+    }
+
+    private RtspResponse SetParameter(RtspRequest req)
+    {
+        if (req.ContentType == "text/parameters")
+        {
+            foreach (var line in Encoding.ASCII.GetString(req.Body).Split("\r\n"))
+            {
+                // "volume: -15.000000" — 0 is full volume, -30 is quietest, -144 is mute
+                if (line.StartsWith("volume:") &&
+                    double.TryParse(line[7..].Trim(), NumberStyles.Float, CultureInfo.InvariantCulture, out var v))
+                {
+                    Volume = v;
+                    _log($"     音量: {v:F1} dB");
+                }
+            }
+        }
+        return new RtspResponse();
+    }
+
+    // ---- TEARDOWN ------------------------------------------------------------------------
+
+    private RtspResponse Teardown(RtspRequest req)
+    {
+        var types = new HashSet<int>();
+        if (req.IsBinaryPlist && req.Body.Length > 0 &&
+            (PropertyListParser.Parse(req.Body) as NSDictionary)?.ObjectForKey("streams") is NSArray streams)
+        {
+            foreach (var s in streams.OfType<NSDictionary>())
+                if (s.ObjectForKey("type") is NSNumber n) types.Add(n.ToInt());
+        }
+
+        if (types.Contains(96)) { _audio?.Dispose(); _audio = null; }
+        if (types.Contains(110)) StopMirror();
+        if (types.Count == 0)
+        {
+            _log("     iPhone 結束投影");
+            StopAll();
+        }
+
+        var r = new RtspResponse();
+        r.Headers["Connection"] = "close";
+        return r;
+    }
+
+    private void StopMirror()
+    {
+        _mirror?.Dispose();
+        _mirror = null;
+        _sink?.Dispose();
+        _sink = null;
+    }
+
+    private void StopAll()
+    {
+        StopMirror();
+        _audio?.Dispose();
+        _audio = null;
+        _ntp?.Dispose();
+        _ntp = null;
+    }
+
+    public void Dispose() => StopAll();
 
     // ---- helpers ---------------------------------------------------------------------------
 
