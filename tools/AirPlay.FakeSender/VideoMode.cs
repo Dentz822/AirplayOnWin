@@ -24,6 +24,7 @@ internal static class VideoMode
     public static async Task<int> RunAsync(string[] args)
     {
         var youtube = args.Contains("--youtube");
+        var twitch = args.Contains("--twitch");
         var host = ArgValue(args, "--host") ?? "127.0.0.1";
         var seconds = int.Parse(ArgValue(args, "--seconds") ?? "10", CultureInfo.InvariantCulture);
         void Log(string s) => Console.WriteLine($"{DateTime.Now:HH:mm:ss.fff} [假 iPhone] {s}");
@@ -49,6 +50,11 @@ internal static class VideoMode
         mediaPlaylist.Append("#EXT-X-ENDLIST\n");
         condensed.Append("#EXT-X-ENDLIST\n");
         File.WriteAllText(Path.Combine(dir, "media.m3u8"), mediaPlaylist.ToString());
+        // Twitch-style master: several qualities incl. audio only, relative URIs
+        File.WriteAllText(Path.Combine(dir, "master.m3u8"),
+            "#EXTM3U\n" +
+            "#EXT-X-STREAM-INF:BANDWIDTH=160000,CODECS=\"mp4a.40.2\",VIDEO=\"audio_only\"\nmedia.m3u8\n" +
+            "#EXT-X-STREAM-INF:BANDWIDTH=900000,RESOLUTION=640x360,CODECS=\"avc1.42c01e,mp4a.40.2\",VIDEO=\"chunked\"\nmedia.m3u8\n");
 
         const string master = """
             #EXTM3U
@@ -115,19 +121,45 @@ internal static class VideoMode
         });
 
         // ---- play ----
-        var location = youtube ? "mlhls://localhost/master.m3u8" : $"{web}/media.m3u8";
+        var location = youtube ? "mlhls://localhost/master.m3u8" : twitch ? $"{web}/master.m3u8" : $"{web}/media.m3u8";
+        var firstUuid = Guid.NewGuid().ToString();
         var play = new NSDictionary
         {
             { "Content-Location", new NSString(location) },
             { "Start-Position-Seconds", new NSNumber(0.0) },
-            { "uuid", new NSString(Guid.NewGuid().ToString()) },
-            { "clientProcName", new NSString(youtube ? "YouTube" : "MobileSafari") },
+            { "uuid", new NSString(firstUuid) },
+            { "clientProcName", new NSString(youtube ? "YouTube" : twitch ? "Twitch" : "MobileSafari") },
         };
         (int Status, byte[] Body) playResponse;
         lock (main)
             playResponse = main.SendWithSession("POST", "/play", BinaryPropertyListWriter.WriteToArray(play),
                 "application/x-apple-binary-plist", sessionId).GetAwaiter().GetResult();
         Log($"/play {location} → {playResponse.Status}");
+
+        if (twitch)
+        {
+            // Twitch: insert a new queue item, then remove the first one: the new one must keep playing.
+            NSDictionary Action(string type, NSDictionary item) => new()
+            {
+                { "type", new NSString(type) },
+                { "params", new NSDictionary { { "item", item } } },
+            };
+            var inserted = Action("playlistInsert", new NSDictionary
+            {
+                { "Content-Location", new NSString(location) },
+                { "Start-Position-Seconds", new NSNumber(0.0) },
+                { "uuid", new NSString(Guid.NewGuid().ToString()) },
+            });
+            var removed = Action("playlistRemove", new NSDictionary { { "uuid", new NSString(firstUuid) } });
+            lock (main)
+            {
+                var r1 = main.SendWithSession("POST", "/action", BinaryPropertyListWriter.WriteToArray(inserted),
+                    "application/x-apple-binary-plist", sessionId).GetAwaiter().GetResult();
+                var r2 = main.SendWithSession("POST", "/action", BinaryPropertyListWriter.WriteToArray(removed),
+                    "application/x-apple-binary-plist", sessionId).GetAwaiter().GetResult();
+                Log($"playlistInsert → {r1.Status}，playlistRemove(第一個) → {r2.Status}");
+            }
+        }
 
         async Task<(double Position, double Duration, double Rate)?> PlaybackInfo()
         {

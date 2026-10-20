@@ -24,7 +24,7 @@ using Org.BouncyCastle.Crypto.Parameters;
 using Org.BouncyCastle.Crypto.Signers;
 using Org.BouncyCastle.Security;
 
-if (args.Contains("--video-url") || args.Contains("--youtube")) return await VideoMode.RunAsync(args);
+if (args.Contains("--video-url") || args.Contains("--youtube") || args.Contains("--twitch")) return await VideoMode.RunAsync(args);
 if (args.Length < 1) { Console.WriteLine("Usage: AirPlay.FakeSender <recording.h264> [--host 127.0.0.1] [--seconds 8] [--volume -25]"); return 1; }
 var recording = args[0];
 var host = "127.0.0.1";

@@ -24,14 +24,16 @@
 |---|---|
 | 控制中心 →「螢幕鏡像輸出」 | 整個手機畫面＋聲音（所有 App 都可以） |
 | App 裡的 AirPlay 按鈕：**YouTube** | 電腦直接播放影片（可暫停、拖曳進度），最高選 1080p H.264 |
+| App 裡的 AirPlay 按鈕：**Twitch**（直播） | 電腦直接播放直播 |
 | App 裡的 AirPlay 按鈕：**Safari 網頁影片** | 電腦直接播放影片網址（HLS / MP4） |
 | App 裡的 AirPlay 按鈕：**音樂 App** | 播放聲音，視窗顯示封面、歌名、歌手、進度 |
 | App 裡的 AirPlay 按鈕：**Netflix、Disney+、Apple TV+ 等** | ✗ 這些影片有 DRM（FairPlay）版權保護，只有 Apple 裝置能播放，請改用「螢幕鏡像輸出」 |
 
 YouTube 直播（沒有結尾的播放清單）目前不支援。
 
-**螢幕鏡像中打開 YouTube**：iOS 預設會自動切換成「影片模式」（只播影片、不再鏡像手機畫面）。
-本程式預設**維持鏡像**（右鍵選單「螢幕鏡像時維持鏡像」可關閉）。沒有在鏡像時直接按 App 的 AirPlay 按鈕，才會用影片模式播放。
+**螢幕鏡像中打開 YouTube / Twitch**：iOS 會自動切換成「影片模式」（電腦直接播放影片，不再鏡像手機畫面）。
+這是 iOS 的行為，接收端無法拒絕（拒絕的話 iPhone 仍會結束鏡像）。想永遠鏡像整個畫面，請在右鍵選單關閉「App 影片直接播放」
+（代價：App 裡的 AirPlay 按鈕只會有聲音）。
 
 ## 執行檔
 
@@ -63,8 +65,7 @@ powershell -ExecutionPolicy Bypass -File scripts\publish.ps1
 | 畫面更新率 | 30 fps（省電）或 60 fps（流暢，預設），下次連線生效 |
 | 開機時自動啟動 | 登入 Windows 時自動啟動（縮小） |
 | 關閉視窗時縮到系統匣 | 開啟後按 X 只是隱藏，iPhone 仍可連線；從系統匣圖示結束。預設關閉：按 X 就完全結束 |
-| App 影片直接播放 | App 的 AirPlay 按鈕（YouTube、Safari）由電腦直接播放影片；關閉後只剩鏡像和聲音 |
-| 螢幕鏡像時維持鏡像 | 鏡像中打開 YouTube 時不切換成影片模式，繼續鏡像整個手機畫面（預設開啟） |
+| App 影片直接播放 | App 的 AirPlay 按鈕（YouTube、Twitch、Safari）由電腦直接播放影片；鏡像中開這些影片會自動切成影片模式。關閉後永遠鏡像整個畫面，App 的 AirPlay 按鈕只有聲音 |
 | 設定防火牆… | 一鍵建立防火牆規則（會跳出系統管理員確認）。沒設定時視窗也會提示 |
 
 - 完全結束程式時會先停止 mDNS 廣播，iPhone 清單裡就不會再出現這台電腦。
@@ -96,6 +97,7 @@ dotnet run --project tools\AirPlay.FakeSender -- recordings\mirror-xxx.h264 --se
 dotnet run --project tools\AirPlay.FakeSender -- recordings\mirror-xxx.h264 --audio-only --cover a.png # 音樂模式（歌曲資訊＋封面）
 dotnet run --project tools\AirPlay.FakeSender -- --video-url --seconds 20   # AirPlay 影片：Safari 網址
 dotnet run --project tools\AirPlay.FakeSender -- --youtube --seconds 20     # AirPlay 影片：YouTube（FCUP＋壓縮清單）
+dotnet run --project tools\AirPlay.FakeSender -- --twitch --seconds 20      # AirPlay 影片：Twitch（多畫質主清單＋插入/移除播放項目）
 #   影片模式可加：--1080p60（1080p 60fps 測試影片）、--no-stop（不送 /stop，直接斷線）
 ```
 影片模式會自己產生測試影片並開一個小網頁伺服器，然後測試播放、暫停、繼續、拖曳、停止。

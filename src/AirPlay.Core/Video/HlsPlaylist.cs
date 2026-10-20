@@ -97,6 +97,19 @@ public static partial class HlsPlaylist
         return sb.ToString();
     }
 
+    /// <summary>
+    /// Master playlist with only the chosen variant (and audio), every URI made absolute against
+    /// the address the original master came from: for http(s) masters (Safari, Twitch).
+    /// </summary>
+    public static string BuildMasterAbsolute(HlsVariant variant, HlsAudio? audio, Uri masterUri)
+    {
+        string Absolute(string uri) => new Uri(masterUri, uri).AbsoluteUri;
+        var sb = new StringBuilder("#EXTM3U\n");
+        if (audio is not null) sb.Append(audio.Line.Replace(audio.Uri, Absolute(audio.Uri))).Append('\n');
+        sb.Append(variant.InfLine).Append('\n').Append(Absolute(variant.Uri)).Append('\n');
+        return sb.ToString();
+    }
+
     /// <summary>Total duration (#EXTINF sum), segment count and whether the playlist is complete (VOD).</summary>
     public static (double Duration, int Segments, bool EndList) Analyze(string mediaPlaylist)
     {

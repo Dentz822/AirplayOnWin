@@ -29,7 +29,7 @@ public sealed class AirPlayReceiver : IAsyncDisposable
     public async Task StartAsync()
     {
         var video = _options.VideoPlayer is { } player
-            ? new Video.AirPlayVideoService(player, AirPlayServices.Port, _log, _options.PreferMirroring)
+            ? new Video.AirPlayVideoService(player, AirPlayServices.Port, _log)
             : null;
         var server = new RtspServer(AirPlayServices.Port,
             conn => new AirPlayConnection(Identity, _options, conn, _log, video), _log);

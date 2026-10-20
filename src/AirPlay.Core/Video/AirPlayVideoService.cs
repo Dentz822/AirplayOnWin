@@ -40,9 +40,8 @@ public sealed class AirPlayVideoService
     private readonly IVideoPlayer _player;
     private readonly int _localPort;
     private readonly Action<string> _log;
-    private readonly Func<bool> _preferMirroring;
-    private int _mirrorSessions;
     private readonly object _lock = new();
+    private static readonly HttpClient Http = CreateHttp();
 
     private ReverseChannel? _reverse;
     private string? _sessionId;
@@ -53,21 +52,21 @@ public sealed class AirPlayVideoService
     private readonly Queue<string> _pendingFetches = new();
     private double _startSeconds;
     private bool _playing;
+    private string? _currentUuid; // play-queue item being played (Twitch replaces items)
 
-    /// <param name="preferMirroring">
-    /// While screen mirroring, refuse to switch to video mode (iOS sends /play before it ends the
-    /// mirroring), so YouTube etc. keep being mirrored as part of the phone screen.
-    /// </param>
-    public AirPlayVideoService(IVideoPlayer player, int localPort, Action<string> log, Func<bool>? preferMirroring = null)
+    public AirPlayVideoService(IVideoPlayer player, int localPort, Action<string> log)
     {
         _player = player;
         _localPort = localPort;
         _log = log;
-        _preferMirroring = preferMirroring ?? (() => true);
     }
 
-    public void MirroringStarted() => Interlocked.Increment(ref _mirrorSessions);
-    public void MirroringStopped() => Interlocked.Decrement(ref _mirrorSessions);
+    private static HttpClient CreateHttp()
+    {
+        var http = new HttpClient { Timeout = TimeSpan.FromSeconds(15) };
+        http.DefaultRequestHeaders.UserAgent.ParseAdd("AppleCoreMedia/1.0.0.21B91 (Apple TV; U; CPU OS 17_1 like Mac OS X; en_us)");
+        return http;
+    }
 
     /// <summary>The iPhone ended its AirPlay session (TEARDOWN): stop any video it started.</summary>
     public void SessionEnded()
@@ -154,22 +153,24 @@ public sealed class AirPlayVideoService
     {
         if (!req.IsBinaryPlist || PropertyListParser.Parse(req.Body) is not NSDictionary plist)
             return RtspResponse.Error(400, "Bad Request");
-        var location = plist.ObjectForKey("Content-Location")?.ToString();
+        lock (_lock) _sessionId = req.Header("X-Apple-Session-ID") ?? Guid.NewGuid().ToString();
+        return BeginItem(plist, "播放要求");
+    }
+
+    /// <summary>Starts playing a play-queue item (from /play, or a later playlistInsert).</summary>
+    private RtspResponse BeginItem(NSDictionary item, string what)
+    {
+        var location = item.ObjectForKey("Content-Location")?.ToString();
         if (string.IsNullOrEmpty(location)) return RtspResponse.Error(400, "Bad Request");
 
-        var start = plist.ObjectForKey("Start-Position-Seconds") is NSNumber s ? s.ToDouble() : 0;
-        var app = plist.ObjectForKey("clientProcName")?.ToString() ?? "?";
-        _log($"     影片: 播放要求 ({app}) {Shorten(location)}，從 {start:F1} 秒開始");
-
-        if (Volatile.Read(ref _mirrorSessions) > 0 && _preferMirroring())
-        {
-            _log("     影片: 目前正在螢幕鏡像，維持鏡像，不切換成影片模式");
-            return RtspResponse.Error(400, "Bad Request");
-        }
+        var start = item.ObjectForKey("Start-Position-Seconds") is NSNumber s ? s.ToDouble() : 0;
+        var app = item.ObjectForKey("clientProcName")?.ToString();
+        var uuid = item.ObjectForKey("uuid")?.ToString() ?? Guid.NewGuid().ToString();
+        _log($"     影片: {what}{(app is null ? "" : $" ({app})")} {Shorten(location)}，從 {start:F1} 秒開始");
 
         lock (_lock)
         {
-            _sessionId = req.Header("X-Apple-Session-ID") ?? Guid.NewGuid().ToString();
+            _currentUuid = uuid;
             _startSeconds = start;
             _mediaPlaylists.Clear();
             _pendingFetches.Clear();
@@ -178,7 +179,10 @@ public sealed class AirPlayVideoService
 
         if (location.StartsWith("http://") || location.StartsWith("https://"))
         {
-            StartPlayer(location, start);
+            if (location.Contains(".m3u8", StringComparison.OrdinalIgnoreCase))
+                _ = PlayDirectHlsAsync(location, start, uuid); // pick one quality first
+            else
+                StartPlayer(location, start);
             return new RtspResponse();
         }
 
@@ -216,7 +220,19 @@ public sealed class AirPlayVideoService
                     return RtspResponse.Error(400, "Bad Request");
                 }
                 break;
+            case "playlistInsert" when parameters?.ObjectForKey("item") is NSDictionary inserted:
+                // Twitch: play A, insert B, remove A: B replaces A.
+                BeginItem(inserted, "插入播放項目");
+                break;
             case "playlistRemove":
+                var removed = (parameters?.ObjectForKey("item") as NSDictionary)?.ObjectForKey("uuid")?.ToString();
+                string? current;
+                lock (_lock) current = _currentUuid;
+                if (removed is not null && current is not null && removed != current)
+                {
+                    _log("     影片: iPhone 移除舊的播放項目（目前的繼續播）");
+                    break;
+                }
                 _log("     影片: iPhone 移除播放項目");
                 StopPlayer();
                 break;
@@ -315,6 +331,40 @@ public sealed class AirPlayVideoService
         {
             _log($"     ⚠ 影片: 送出 FCUP 失敗 {ex.Message}");
         }
+    }
+
+    /// <summary>
+    /// A plain http(s) HLS address (Safari, Twitch). If it is a master playlist with several
+    /// qualities, choose one (and its audio) and give the player a master with only those, so it
+    /// does not open every quality while starting. Anything unexpected: play the address as is.
+    /// </summary>
+    private async Task PlayDirectHlsAsync(string location, double start, string uuid)
+    {
+        var playUrl = location;
+        try
+        {
+            var text = await Http.GetStringAsync(location);
+            if (text.StartsWith("#EXTM3U") && text.Contains("#EXT-X-STREAM-INF"))
+            {
+                var (variants, audio) = HlsPlaylist.ParseMaster(text);
+                var variant = HlsPlaylist.ChooseVariant(variants);
+                if (variant is not null)
+                {
+                    var track = HlsPlaylist.ChooseAudio(audio, variant.AudioGroup, CultureInfo.CurrentUICulture.TwoLetterISOLanguageName);
+                    var master = HlsPlaylist.BuildMasterAbsolute(variant, track, new Uri(location));
+                    lock (_lock) _localMaster = master;
+                    playUrl = LocalPrefix + "/master.m3u8";
+                    _log($"     影片: {variants.Count} 種畫質，選 {(variant.Height > 0 ? $"{variant.Width}x{variant.Height}" : "預設")} {variant.Codecs}");
+                }
+            }
+        }
+        catch (Exception ex) when (ex is HttpRequestException or TaskCanceledException or FormatException or UriFormatException)
+        {
+            _log($"     影片: 無法先讀取播放清單（{ex.Message}），直接播放");
+        }
+
+        lock (_lock) if (_currentUuid != uuid) return; // replaced meanwhile
+        StartPlayer(playUrl, start);
     }
 
     private RtspResponse ServeLocalPlaylist(string path)

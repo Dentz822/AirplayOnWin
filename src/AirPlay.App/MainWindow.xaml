@@ -17,8 +17,8 @@
                     <MenuItem x:Name="Fps30Item" Header="30 fps（較省電）" IsCheckable="True" Click="Fps_Click" Tag="30" />
                     <MenuItem x:Name="Fps60Item" Header="60 fps（較流暢）" IsCheckable="True" Click="Fps_Click" Tag="60" />
                 </MenuItem>
-                <MenuItem x:Name="AppVideoItem" Header="App 影片直接播放（YouTube、Safari）" IsCheckable="True" Click="AppVideo_Click" />
-                <MenuItem x:Name="KeepMirroringItem" Header="螢幕鏡像時維持鏡像（不切換成影片模式）" IsCheckable="True" Click="KeepMirroring_Click" />
+                <MenuItem x:Name="AppVideoItem" Header="App 影片直接播放（YouTube、Twitch、Safari）" IsCheckable="True" Click="AppVideo_Click"
+                          ToolTip="開啟：App 的 AirPlay 按鈕由電腦直接播放影片；鏡像中開這些影片時，iPhone 會自動切成影片模式。&#x0a;關閉：永遠鏡像整個手機畫面；App 的 AirPlay 按鈕只有聲音。" />
                 <MenuItem x:Name="AutoStartItem" Header="開機時自動啟動" IsCheckable="True" Click="AutoStart_Click" />
                 <MenuItem x:Name="CloseToTrayItem" Header="關閉視窗時縮到系統匣" IsCheckable="True" Click="CloseToTray_Click" />
                 <MenuItem Header="設定防火牆…" Click="Firewall_Click" />

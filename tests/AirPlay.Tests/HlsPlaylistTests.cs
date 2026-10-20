@@ -95,6 +95,26 @@ public class HlsPlaylistTests
     }
 
     [Fact]
+    public void BuildsAbsoluteMasterForTwitchStylePlaylists()
+    {
+        const string twitch = "#EXTM3U\n" +
+            "#EXT-X-STREAM-INF:BANDWIDTH=160000,CODECS=\"mp4a.40.2\",VIDEO=\"audio_only\"\n" +
+            "https://cdn.example/audio_only/index.m3u8\n" +
+            "#EXT-X-STREAM-INF:BANDWIDTH=6000000,RESOLUTION=1920x1080,CODECS=\"avc1.64002A,mp4a.40.2\",VIDEO=\"chunked\"\n" +
+            "https://cdn.example/chunked/index.m3u8\n" +
+            "#EXT-X-STREAM-INF:BANDWIDTH=3000000,RESOLUTION=1280x720,CODECS=\"avc1.4D401F,mp4a.40.2\",VIDEO=\"720p60\"\n" +
+            "720p60/index.m3u8\n";
+        var (variants, audio) = HlsPlaylist.ParseMaster(twitch);
+        var v = HlsPlaylist.ChooseVariant(variants)!;
+        Assert.Equal("https://cdn.example/chunked/index.m3u8", v.Uri); // not audio-only
+
+        var v720 = HlsPlaylist.ChooseVariant(variants, 720)!;
+        var master = HlsPlaylist.BuildMasterAbsolute(v720, null, new Uri("https://usher.example/api/channel/hls/x.m3u8?token=1"));
+        Assert.Contains("\nhttps://usher.example/api/channel/hls/720p60/index.m3u8\n", master); // relative made absolute
+        Assert.DoesNotContain("audio_only", master);
+    }
+
+    [Fact]
     public void LeavesNormalPlaylistsAlone()
     {
         const string normal = "#EXTM3U\n#EXTINF:4,\nhttps://cdn/x.ts\n";
