@@ -29,6 +29,29 @@
 
         <Image x:Name="Video" Stretch="Uniform" RenderOptions.BitmapScalingMode="HighQuality" />
 
+        <!-- Audio-only AirPlay (music, or a video app sending sound only): what's playing -->
+        <StackPanel x:Name="MusicPanel" Visibility="Collapsed" VerticalAlignment="Center" HorizontalAlignment="Center"
+                    Margin="24" MaxWidth="420">
+            <Border CornerRadius="10" ClipToBounds="True" Background="#222" Width="300" Height="300">
+                <Grid>
+                    <TextBlock Text="♪" FontSize="96" Foreground="#555" HorizontalAlignment="Center" VerticalAlignment="Center" />
+                    <Image x:Name="Artwork" Stretch="UniformToFill" RenderOptions.BitmapScalingMode="HighQuality" />
+                </Grid>
+            </Border>
+            <TextBlock x:Name="TrackTitle" Foreground="White" FontSize="22" FontWeight="SemiBold" Margin="0,20,0,4"
+                       TextAlignment="Center" TextTrimming="CharacterEllipsis" />
+            <TextBlock x:Name="TrackArtist" Foreground="#B0B0B0" FontSize="15" TextAlignment="Center"
+                       TextTrimming="CharacterEllipsis" />
+            <ProgressBar x:Name="TrackProgress" Height="4" Margin="0,20,0,6" Maximum="1" Background="#333"
+                         Foreground="#2C8CFF" BorderThickness="0" />
+            <Grid>
+                <TextBlock x:Name="TrackPosition" Foreground="#909090" FontSize="12" HorizontalAlignment="Left" />
+                <TextBlock x:Name="TrackDuration" Foreground="#909090" FontSize="12" HorizontalAlignment="Right" />
+            </Grid>
+            <TextBlock x:Name="MusicHint" Foreground="#606060" FontSize="12" TextAlignment="Center" TextWrapping="Wrap"
+                       Margin="0,18,0,0" Text="只有聲音？影片類 App 請改用「螢幕鏡像輸出」，或等 App 影片播放功能完成。" />
+        </StackPanel>
+
         <StackPanel x:Name="Waiting" VerticalAlignment="Center" HorizontalAlignment="Center" Margin="24">
             <TextBlock x:Name="WaitingTitle" Text="等待 iPhone 連線" Foreground="White" FontSize="22"
                        HorizontalAlignment="Center" Margin="0,0,0,16" />

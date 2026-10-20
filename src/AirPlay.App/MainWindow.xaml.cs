@@ -7,6 +7,7 @@ using System.Windows.Media;
 using System.Windows.Media.Imaging;
 using AirPlay.Core;
 using AirPlay.Core.Identity;
+using AirPlay.Core.Metadata;
 using AirPlay.Core.Timing;
 using AirPlay.Media;
 
@@ -26,6 +27,9 @@ public partial class MainWindow : Window
     private bool _exitRequested;
     private bool _closingDone;
     private bool _trayHintShown;
+    private bool _videoActive;
+    private NowPlaying? _nowPlaying;
+    private readonly System.Windows.Threading.DispatcherTimer _progressTimer = new() { Interval = TimeSpan.FromMilliseconds(500) };
 
     // full screen state
     private bool _fullScreen;
@@ -43,6 +47,7 @@ public partial class MainWindow : Window
         if (startMinimized) WindowState = WindowState.Minimized;
 
         Closing += OnClosing;
+        _progressTimer.Tick += (_, _) => UpdateProgress();
         KeyDown += OnKeyDown;
         CompositionTarget.Rendering += OnRendering;
     }
@@ -96,7 +101,12 @@ public partial class MainWindow : Window
                     _activeClock = clock;
                     return new VideoPresenter(_frames, clock, Log, OnSessionActiveChanged);
                 },
-                AudioSinkFactory = (format, clock) => new AudioPlayer(format, clock, Log),
+                AudioSinkFactory = (format, clock) =>
+                {
+                    _activeClock ??= clock; // audio-only sessions: used to tell if music is playing
+                    return new AudioPlayer(format, clock, Log);
+                },
+                NowPlayingChanged = np => Dispatcher.BeginInvoke(() => OnNowPlaying(np)),
                 ClientConnected = (client, model) => Dispatcher.BeginInvoke(() => OnClientConnected(client)),
             }, Log);
             await _receiver.StartAsync();
@@ -233,7 +243,8 @@ public partial class MainWindow : Window
 
     private void OnSessionActiveChanged(bool active) => Dispatcher.BeginInvoke(() =>
     {
-        Waiting.Visibility = active ? Visibility.Collapsed : Visibility.Visible;
+        _videoActive = active;
+        UpdatePanels();
         if (!active)
         {
             _frames.Clear();
@@ -245,6 +256,74 @@ public partial class MainWindow : Window
         }
     });
 
+    // ---- audio-only "now playing" ------------------------------------------------------------
+
+    private void OnNowPlaying(NowPlaying? np)
+    {
+        var artworkChanged = !ReferenceEquals(np?.Artwork, _nowPlaying?.Artwork);
+        _nowPlaying = np;
+        if (np is null)
+        {
+            _activeClock = null;
+            Status.Text = "投影已結束";
+            UpdatePanels();
+            return;
+        }
+
+        TrackTitle.Text = string.IsNullOrEmpty(np.Title) ? "正在播放" : np.Title;
+        TrackArtist.Text = string.Join(" — ", new[] { np.Artist, np.Album }.Where(s => !string.IsNullOrEmpty(s)));
+        if (artworkChanged) Artwork.Source = LoadImage(np.Artwork);
+        _tray.Text = $"♪ {np.Title} — {np.Artist}";
+        UpdateProgress();
+        UpdatePanels();
+    }
+
+    /// <summary>Video, the music panel or the waiting screen — exactly one is visible.</summary>
+    private void UpdatePanels()
+    {
+        var music = !_videoActive && _nowPlaying is not null;
+        MusicPanel.Visibility = music ? Visibility.Visible : Visibility.Collapsed;
+        Waiting.Visibility = !_videoActive && !music ? Visibility.Visible : Visibility.Collapsed;
+        if (music) _progressTimer.Start(); else _progressTimer.Stop();
+    }
+
+    private void UpdateProgress()
+    {
+        if (_nowPlaying is not { } np || np.Duration <= TimeSpan.Zero)
+        {
+            TrackProgress.Value = 0;
+            TrackPosition.Text = TrackDuration.Text = "";
+            return;
+        }
+        var playing = _activeClock?.AudibleRemoteNanosNow() is not null;
+        var position = np.CurrentPosition(playing);
+        TrackProgress.Value = position.TotalSeconds / np.Duration.TotalSeconds;
+        TrackPosition.Text = Format(position);
+        TrackDuration.Text = Format(np.Duration);
+        Status.Text = playing ? "播放中" : "暫停";
+
+        static string Format(TimeSpan t) => t.TotalHours >= 1 ? t.ToString(@"h\:mm\:ss") : t.ToString(@"m\:ss");
+    }
+
+    private static BitmapImage? LoadImage(byte[]? data)
+    {
+        if (data is null || data.Length == 0) return null;
+        try
+        {
+            var image = new BitmapImage();
+            image.BeginInit();
+            image.CacheOption = BitmapCacheOption.OnLoad;
+            image.StreamSource = new System.IO.MemoryStream(data);
+            image.EndInit();
+            image.Freeze();
+            return image;
+        }
+        catch (Exception)
+        {
+            return null; // not a decodable image
+        }
+    }
+
     private int _framesThisSecond;
     private readonly Stopwatch _fpsClock = Stopwatch.StartNew();
     // A/V sync statistics: how far each shown picture is from the audio being heard.
@@ -254,7 +333,7 @@ public partial class MainWindow : Window
 
     private void OnRendering(object? sender, EventArgs e)
     {
-        if (Waiting.Visibility == Visibility.Visible) return;
+        if (!_videoActive) return;
 
         // Video follows audio: with live audio, show the newest picture whose time has been reached.
         var audibleNow = _activeClock?.AudibleRemoteNanosNow();

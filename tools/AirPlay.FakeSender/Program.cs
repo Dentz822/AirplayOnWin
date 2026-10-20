@@ -2,6 +2,7 @@
 // streaming a recorded H.264 file as video and a generated tone as audio.
 //
 // Usage: AirPlay.FakeSender <recording.h264> [--host 127.0.0.1] [--seconds 8] [--volume -25]
+//                           [--audio-only [--cover image.png]]   (music-style session: sound + track info)
 //
 // Audio is AAC-LC (ct=4) because FFmpeg has no AAC-ELD encoder; a real iPhone uses AAC-ELD (ct=8)
 // while mirroring.
@@ -27,11 +28,14 @@ var recording = args[0];
 var host = "127.0.0.1";
 var seconds = 8.0;
 var volume = -25.0;
+var audioOnly = args.Contains("--audio-only");
+string? cover = null;
 for (var i = 1; i < args.Length - 1; i++)
 {
     if (args[i] == "--host") host = args[++i];
     else if (args[i] == "--seconds") seconds = double.Parse(args[++i], CultureInfo.InvariantCulture);
     else if (args[i] == "--volume") volume = double.Parse(args[++i], CultureInfo.InvariantCulture);
+    else if (args[i] == "--cover") cover = args[++i];
 }
 void Log(string s) => Console.WriteLine($"{DateTime.Now:HH:mm:ss.fff} [假 iPhone] {s}");
 
@@ -117,7 +121,7 @@ var setup1 = new NSDictionary
     { "timingProtocol", new NSString("NTP") },
     { "timingPort", new NSNumber(((IPEndPoint)ntp.Client.LocalEndPoint!).Port) },
     { "name", new NSString("假 iPhone") }, { "model", new NSString("iPhone16,2") }, { "osVersion", new NSString("26.6") },
-    { "isScreenMirroringSession", new NSNumber(true) },
+    { "isScreenMirroringSession", new NSNumber(!audioOnly) },
 };
 var r1 = await rtsp.Send("SETUP", "rtsp://x/1", BinaryPropertyListWriter.WriteToArray(setup1), "application/x-apple-binary-plist");
 Log($"SETUP 1 → {r1.Status}");
@@ -126,25 +130,41 @@ await rtsp.Send("RECORD", "rtsp://x/1");
 // ---- SETUP 2: video (110) + audio (96, AAC-LC) ----
 using var audioControl = new UdpClient(new IPEndPoint(IPAddress.Any, 0));
 const ulong streamId = 1234567890123456789UL;
+var audioStream = new NSDictionary { { "type", new NSNumber(96) }, { "ct", new NSNumber(4) }, { "spf", new NSNumber(1024) },
+                                     { "controlPort", new NSNumber(((IPEndPoint)audioControl.Client.LocalEndPoint!).Port) } };
 var setup2 = new NSDictionary
 {
-    { "streams", new NSArray(
-        new NSDictionary { { "type", new NSNumber(110) }, { "streamConnectionID", new NSNumber(unchecked((long)streamId)) } },
-        new NSDictionary { { "type", new NSNumber(96) }, { "ct", new NSNumber(4) }, { "spf", new NSNumber(1024) },
-                           { "controlPort", new NSNumber(((IPEndPoint)audioControl.Client.LocalEndPoint!).Port) } }) },
+    { "streams", audioOnly
+        ? new NSArray(audioStream)
+        : new NSArray(new NSDictionary { { "type", new NSNumber(110) }, { "streamConnectionID", new NSNumber(unchecked((long)streamId)) } }, audioStream) },
 };
 var r2 = await rtsp.Send("SETUP", "rtsp://x/1", BinaryPropertyListWriter.WriteToArray(setup2), "application/x-apple-binary-plist");
 var streams = ((NSArray)((NSDictionary)PropertyListParser.Parse(r2.Body)).ObjectForKey("streams"))
     .OfType<NSDictionary>().ToDictionary(d => ((NSNumber)d.ObjectForKey("type")).ToInt());
-var videoPort = ((NSNumber)streams[110].ObjectForKey("dataPort")).ToInt();
+var videoPort = audioOnly ? 0 : ((NSNumber)streams[110].ObjectForKey("dataPort")).ToInt();
 var audioPort = ((NSNumber)streams[96].ObjectForKey("dataPort")).ToInt();
 var audioControlPort = ((NSNumber)streams[96].ObjectForKey("controlPort")).ToInt();
 Log($"SETUP 2 → {r2.Status}, 畫面 TCP {videoPort}, 聲音 UDP {audioPort}");
 await rtsp.Send("SET_PARAMETER", "rtsp://x/1", Encoding.ASCII.GetBytes($"volume: {volume.ToString("F6", CultureInfo.InvariantCulture)}\r\n"), "text/parameters");
 
+// ---- track info (music-style sessions) ----
+if (audioOnly)
+{
+    static byte[] Dmap(string tag, byte[] value) =>
+        [.. Encoding.ASCII.GetBytes(tag), (byte)(value.Length >> 24), (byte)(value.Length >> 16), (byte)(value.Length >> 8), (byte)value.Length, .. value];
+    var items = Dmap("minm", Encoding.UTF8.GetBytes("測試歌曲"))
+        .Concat(Dmap("asar", Encoding.UTF8.GetBytes("假 iPhone 樂團")))
+        .Concat(Dmap("asal", Encoding.UTF8.GetBytes("測試專輯"))).ToArray();
+    await rtsp.Send("SET_PARAMETER", "rtsp://x/1", Dmap("mlit", items), "application/x-dmap-tagged");
+    if (cover is not null) await rtsp.Send("SET_PARAMETER", "rtsp://x/1", File.ReadAllBytes(cover), "image/png");
+    // 3:20 song, currently at 0:15
+    await rtsp.Send("SET_PARAMETER", "rtsp://x/1", Encoding.ASCII.GetBytes($"progress: 1000/{1000 + 15 * 44100}/{1000 + 200 * 44100}\r\n"), "text/parameters");
+    Log("已送出歌曲資訊");
+}
+
 // ---- stream ----
 var video = new VideoSender(host, videoPort, aesKey, streamId);
-await video.ConnectAsync();
+if (!audioOnly) await video.ConnectAsync();
 var audio = new AudioSender(host, audioPort, aesKey, eiv);
 var accessUnits = AnnexBReader.AccessUnits(File.ReadAllBytes(recording)).ToList();
 Log($"開始串流 {seconds} 秒（錄影 {accessUnits.Count} 幀，聲音 440/660 Hz）");
@@ -160,7 +180,7 @@ static ulong ToQ32(double seconds) => (ulong)(seconds * 4294967296.0);
 while (clock.Elapsed.TotalSeconds < seconds)
 {
     var t = clock.Elapsed.TotalSeconds;
-    while (videoSent / 30.0 <= t && videoSent < accessUnits.Count)
+    while (!audioOnly && videoSent / 30.0 <= t && videoSent < accessUnits.Count)
     {
         var ts = ToQ32(videoSent / 30.0);
         await video.SendAccessUnitAsync(accessUnits[videoSent++], ts);

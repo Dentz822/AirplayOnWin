@@ -5,6 +5,7 @@ using AirPlay.Core.Audio;
 using AirPlay.Core.Discovery;
 using AirPlay.Core.FairPlay;
 using AirPlay.Core.Identity;
+using AirPlay.Core.Metadata;
 using AirPlay.Core.Mirroring;
 using AirPlay.Core.Pairing;
 using AirPlay.Core.Rtsp;
@@ -27,6 +28,8 @@ public sealed class ReceiverOptions
     public Func<AudioFormat, PlaybackClock, IAudioSink>? AudioSinkFactory { get; init; }
     /// <summary>Called when an iPhone starts a session: (device name, model).</summary>
     public Action<string, string>? ClientConnected { get; init; }
+    /// <summary>Track info / album art / progress changed (null = session ended).</summary>
+    public Action<NowPlaying?>? NowPlayingChanged { get; init; }
 }
 
 /// <summary>Receives the decoded-ready H.264 of one mirroring session.</summary>
@@ -60,6 +63,7 @@ public sealed class AirPlayConnection : IRtspHandler, IDisposable
     /// <summary>AES-CBC IV for audio (stage 7).</summary>
     public byte[]? AesIv { get; private set; }
     public double Volume { get; private set; }
+    public NowPlaying? NowPlaying { get; private set; }
 
     public AirPlayConnection(DeviceIdentity id, ReceiverOptions options, RtspConnectionInfo connection, Action<string> log)
     {
@@ -368,10 +372,35 @@ public sealed class AirPlayConnection : IRtspHandler, IDisposable
 
     private RtspResponse SetParameter(RtspRequest req)
     {
+        switch (req.ContentType)
+        {
+            case "image/jpeg" or "image/png":
+                UpdateNowPlaying(np => np with { Artwork = req.Body });
+                _log($"     收到封面圖片 ({req.Body.Length / 1024} KB)");
+                break;
+            case "image/none":
+                UpdateNowPlaying(np => np with { Artwork = null });
+                break;
+            case "application/x-dmap-tagged":
+                var tags = NowPlayingParser.ParseDmap(req.Body);
+                tags.TryGetValue("minm", out var title);
+                tags.TryGetValue("asar", out var artist);
+                tags.TryGetValue("asal", out var album);
+                UpdateNowPlaying(np => np with { Title = title, Artist = artist, Album = album });
+                _log($"     正在播放: {title} — {artist}（{album}）");
+                break;
+        }
         if (req.ContentType == "text/parameters")
         {
             foreach (var line in Encoding.ASCII.GetString(req.Body).Split("\r\n"))
             {
+                if (NowPlayingParser.ParseProgress(line) is { } progress)
+                    UpdateNowPlaying(np => np with
+                    {
+                        Position = progress.Position,
+                        Duration = progress.Duration,
+                        PositionAtTicks = System.Diagnostics.Stopwatch.GetTimestamp(),
+                    });
                 // "volume: -15.000000" — 0 is full volume, -30 is quietest, -144 is mute
                 if (line.StartsWith("volume:") &&
                     double.TryParse(line[7..].Trim(), NumberStyles.Float, CultureInfo.InvariantCulture, out var v))
@@ -383,6 +412,12 @@ public sealed class AirPlayConnection : IRtspHandler, IDisposable
             }
         }
         return new RtspResponse();
+    }
+
+    private void UpdateNowPlaying(Func<NowPlaying, NowPlaying> change)
+    {
+        NowPlaying = change(NowPlaying ?? new NowPlaying());
+        _options.NowPlayingChanged?.Invoke(NowPlaying);
     }
 
     // ---- TEARDOWN ------------------------------------------------------------------------
@@ -420,6 +455,11 @@ public sealed class AirPlayConnection : IRtspHandler, IDisposable
 
     private void StopAll()
     {
+        if (NowPlaying is not null)
+        {
+            NowPlaying = null;
+            _options.NowPlayingChanged?.Invoke(null);
+        }
         StopMirror();
         _audio?.Dispose();
         _audio = null;
