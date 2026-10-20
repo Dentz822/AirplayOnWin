@@ -1,4 +1,5 @@
 using AirPlay.Core.Audio;
+using AirPlay.Core.Timing;
 using AirPlay.Media;
 using NAudio.CoreAudioApi;
 using NAudio.Wave;
@@ -15,17 +16,21 @@ public sealed class AudioPlayer : IAudioSink
 {
     private static readonly TimeSpan TargetLatency = TimeSpan.FromMilliseconds(100);
     private static readonly TimeSpan MaxLatency = TimeSpan.FromMilliseconds(400);
+    /// <summary>WASAPI buffer (40 ms) plus device/resampler delay: time from leaving our buffer to the speaker.</summary>
+    private const long OutputLatencyNs = 50_000_000;
 
     private readonly AudioDecoder _decoder;
     private readonly BufferedWaveProvider _buffer;
     private readonly WasapiOut _output;
     private readonly Action<string> _log;
+    private readonly PlaybackClock? _clock;
     private bool _playing;
     private long _frames, _trims;
 
-    public AudioPlayer(AudioFormat format, Action<string> log)
+    public AudioPlayer(AudioFormat format, PlaybackClock? clock, Action<string> log)
     {
         _log = log;
+        _clock = clock;
         _decoder = new AudioDecoder(format.CompressionType);
         _buffer = new BufferedWaveProvider(new WaveFormat(AudioDecoder.SampleRate, 16, AudioDecoder.Channels))
         {
@@ -61,6 +66,15 @@ public sealed class AudioPlayer : IAudioSink
             _output.Play();
             _playing = true;
             _log("     開始播放聲音");
+        }
+
+        // Tell the clock which moment is audible now: this frame ends `buffered` + output latency
+        // from now, so the speaker is currently playing (frame end − that delay).
+        if (_playing && _clock?.AudioRtpToRemoteNanos(rtpTimestamp) is long frameStartNs)
+        {
+            var frameNs = pcm.Length / (2 * AudioDecoder.Channels) * 1_000_000_000L / AudioDecoder.SampleRate;
+            var aheadNs = (long)(_buffer.BufferedDuration.TotalMilliseconds * 1_000_000) + OutputLatencyNs;
+            _clock.ReportAudible(frameStartNs + frameNs - aheadNs);
         }
     }
 

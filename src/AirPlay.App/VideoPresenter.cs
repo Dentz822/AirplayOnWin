@@ -2,63 +2,38 @@ using System.Diagnostics;
 using System.Threading.Channels;
 using AirPlay.Core;
 using AirPlay.Core.Mirroring;
+using AirPlay.Core.Timing;
 using AirPlay.Media;
 
 namespace AirPlay.App;
 
 /// <summary>
-/// Latest decoded picture, shared between the decode thread (writer) and the UI thread (reader).
-/// Only the newest picture matters for display, so the writer simply overwrites it.
-/// </summary>
-public sealed class LatestFrame
-{
-    private readonly object _lock = new();
-    private byte[] _pixels = [];
-
-    public int Width { get; private set; }
-    public int Height { get; private set; }
-    public long Version { get; private set; }
-
-    public void Store(BgraFrame f)
-    {
-        lock (_lock)
-        {
-            var size = f.Stride * f.Height;
-            if (_pixels.Length != size) _pixels = new byte[size];
-            Buffer.BlockCopy(f.Pixels, 0, _pixels, 0, size);
-            Width = f.Width;
-            Height = f.Height;
-            Version++;
-        }
-    }
-
-    /// <summary>Runs <paramref name="read"/> with the pixels while holding the lock.</summary>
-    public void Read(Action<int, int, byte[]> read)
-    {
-        lock (_lock) read(Width, Height, _pixels);
-    }
-}
-
-/// <summary>
-/// Sink for one mirroring session: decodes H.264 on its own thread and publishes pictures to
-/// <see cref="LatestFrame"/>. Decoding never skips frames (H.264 frames depend on earlier ones);
-/// display just shows whichever picture is newest.
+/// Sink for one mirroring session: decodes H.264 on its own thread and puts each picture,
+/// tagged with its presentation time, into the <see cref="FrameQueue"/> that the window shows from.
+/// Decoding never skips frames (H.264 frames depend on earlier ones); display picks the
+/// newest picture that is due, so it follows the audio when there is audio.
 /// </summary>
 public sealed class VideoPresenter : IMirrorSink
 {
-    private readonly LatestFrame _output;
+    private readonly FrameQueue _output;
     private readonly Action<string> _log;
     private readonly Action<bool> _onActiveChanged;
     private readonly Channel<VideoFrame> _queue = Channel.CreateUnbounded<VideoFrame>(new() { SingleReader = true });
     private readonly Task _decodeLoop;
+    private readonly bool _useTimestamps;
 
-    public VideoPresenter(LatestFrame output, Action<string> log, Action<bool> onActiveChanged)
+    /// <param name="clock">The session clock, or null to show pictures as soon as they are decoded.</param>
+    public VideoPresenter(FrameQueue output, PlaybackClock? clock, Action<string> log, Action<bool> onActiveChanged)
     {
         _output = output;
+        Clock = clock;
+        _useTimestamps = clock is not null;
         _log = log;
         _onActiveChanged = onActiveChanged;
         _decodeLoop = Task.Factory.StartNew(DecodeLoop, TaskCreationOptions.LongRunning);
     }
+
+    public PlaybackClock? Clock { get; }
 
     public void OnFormat(VideoFormat format) { }
 
@@ -69,17 +44,18 @@ public sealed class VideoPresenter : IMirrorSink
         using var decoder = new H264Decoder();
         var first = true;
         var clock = Stopwatch.StartNew();
-        long shownAtLastReport = 0, shown = 0;
+        long shownAtLastReport = 0, decoded = 0;
         try
         {
             while (_queue.Reader.WaitToReadAsync().AsTask().GetAwaiter().GetResult())
             {
                 while (_queue.Reader.TryRead(out var frame))
                 {
+                    long? remoteNs = _useTimestamps ? PlaybackClock.VideoToRemoteNanos(frame.Timestamp) : null;
                     decoder.Decode(frame.AnnexB, picture =>
                     {
-                        _output.Store(picture);
-                        shown++;
+                        _output.Enqueue(picture, remoteNs);
+                        decoded++;
                         if (first)
                         {
                             first = false;
@@ -90,8 +66,8 @@ public sealed class VideoPresenter : IMirrorSink
                 }
                 if (clock.Elapsed.TotalSeconds >= 10)
                 {
-                    _log($"     解碼: {(shown - shownAtLastReport) / clock.Elapsed.TotalSeconds:F1} fps, 錯誤 {decoder.Errors}");
-                    shownAtLastReport = shown;
+                    _log($"     解碼: {(decoded - shownAtLastReport) / clock.Elapsed.TotalSeconds:F1} fps, 錯誤 {decoder.Errors}");
+                    shownAtLastReport = decoded;
                     clock.Restart();
                 }
             }

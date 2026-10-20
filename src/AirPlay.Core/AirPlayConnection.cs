@@ -22,9 +22,9 @@ public sealed class ReceiverOptions
     /// <summary>Log headers and decoded plist bodies of every request.</summary>
     public bool Verbose { get; init; }
     /// <summary>Creates a consumer for each mirroring session's video (null = discard).</summary>
-    public Func<IMirrorSink>? MirrorSinkFactory { get; init; }
+    public Func<PlaybackClock, IMirrorSink>? MirrorSinkFactory { get; init; }
     /// <summary>Creates a player for each audio stream (null = receive and discard).</summary>
-    public Func<AudioFormat, IAudioSink>? AudioSinkFactory { get; init; }
+    public Func<AudioFormat, PlaybackClock, IAudioSink>? AudioSinkFactory { get; init; }
 }
 
 /// <summary>Receives the decoded-ready H.264 of one mirroring session.</summary>
@@ -46,6 +46,7 @@ public sealed class AirPlayConnection : IRtspHandler, IDisposable
     private readonly RtspConnectionInfo _connection;
     private readonly PairingSession _pairing;
     private readonly FairPlaySession _fairPlay = new();
+    private readonly PlaybackClock _clock = new(); // shared by this session's video and audio
 
     private NtpClient? _ntp;
     private MirrorStream? _mirror;
@@ -294,7 +295,7 @@ public sealed class AirPlayConnection : IRtspHandler, IDisposable
         _mirror = new MirrorStream(AesKey, connectionId, _log);
         if (_options.MirrorSinkFactory is { } factory)
         {
-            _sink = factory();
+            _sink = factory(_clock);
             _mirror.FormatChanged += _sink.OnFormat;
             _mirror.FrameReceived += _sink.OnFrame;
         }
@@ -318,14 +319,14 @@ public sealed class AirPlayConnection : IRtspHandler, IDisposable
 
         _audio?.Dispose();
         IAudioSink? sink = null;
-        try { sink = _options.AudioSinkFactory?.Invoke(format); }
+        try { sink = _options.AudioSinkFactory?.Invoke(format, _clock); }
         catch (Exception ex) { _log($"     ⚠ 無法建立音訊播放: {ex.Message}"); }
         sink?.SetVolume(Volume);
 
         var remoteControl = remoteControlPort > 0
             ? new System.Net.IPEndPoint(_connection.Remote.Address, remoteControlPort)
             : null;
-        _audio = new AudioStream(format, AesKey, AesIv, remoteControl, sink, _log);
+        _audio = new AudioStream(format, AesKey, AesIv, remoteControl, sink, _log, _clock);
         _audio.Start();
         _log($"     音訊串流準備好: {format.CodecName}, 每幀 {spf} 樣本 (UDP {_audio.DataPort}/{_audio.ControlPort}){(sink is null ? "，不播放" : "")}");
 
@@ -393,7 +394,7 @@ public sealed class AirPlayConnection : IRtspHandler, IDisposable
                 if (s.ObjectForKey("type") is NSNumber n) types.Add(n.ToInt());
         }
 
-        if (types.Contains(96)) { _audio?.Dispose(); _audio = null; }
+        if (types.Contains(96)) { _audio?.Dispose(); _audio = null; _clock.ResetAudio(); }
         if (types.Contains(110)) StopMirror();
         if (types.Count == 0)
         {

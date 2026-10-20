@@ -28,7 +28,7 @@ public class ServerTests : IAsyncLifetime
         _port = ((IPEndPoint)probe.LocalEndpoint).Port;
         probe.Stop();
 
-        var options = new ReceiverOptions { MirrorSinkFactory = () => _sink };
+        var options = new ReceiverOptions { MirrorSinkFactory = _ => _sink };
         var server = new RtspServer(_port, conn => _connection = new AirPlayConnection(_id, options, conn, _ => { }), _ => { });
         _ = server.RunAsync(_cts.Token);
         await Task.Delay(100);

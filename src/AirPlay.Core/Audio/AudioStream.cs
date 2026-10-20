@@ -3,6 +3,7 @@ using System.Net;
 using System.Net.Sockets;
 using System.Security.Cryptography;
 using AirPlay.Core.Net;
+using AirPlay.Core.Timing;
 
 namespace AirPlay.Core.Audio;
 
@@ -54,6 +55,7 @@ public sealed class AudioStream : IDisposable
     private readonly CancellationTokenSource _cts = new();
     private readonly List<Task> _loops = new();
     private readonly ReorderBuffer _reorder;
+    private readonly PlaybackClock? _clock;
     private readonly object _lock = new();
     private ushort _resendSeq;
 
@@ -68,8 +70,9 @@ public sealed class AudioStream : IDisposable
 
     /// <param name="remoteControl">The iPhone's control port (for resend requests), or null.</param>
     public AudioStream(AudioFormat format, byte[] aesKey, byte[] aesIv, IPEndPoint? remoteControl,
-        IAudioSink? sink, Action<string> log)
+        IAudioSink? sink, Action<string> log, PlaybackClock? clock = null)
     {
+        _clock = clock;
         Format = format;
         _sink = sink;
         _log = log;
@@ -112,8 +115,11 @@ public sealed class AudioStream : IDisposable
         switch (packet[1] & 0x7F)
         {
             case 0x54 when packet.Length >= 20: // time sync
-                LastSync = (BinaryPrimitives.ReadUInt32BigEndian(packet.AsSpan(4)),
+                var sync = (BinaryPrimitives.ReadUInt32BigEndian(packet.AsSpan(4)),
                             BinaryPrimitives.ReadUInt64BigEndian(packet.AsSpan(8)));
+                if (LastSync is null) _log("     收到聲音時間同步，開始影音同步");
+                LastSync = sync;
+                _clock?.UpdateAudioSync(sync.Item1, sync.Item2);
                 break;
             case 0x56 when packet.Length >= 16: // resent data packet, wrapped after a 4-byte header
                 Enqueue(packet[4..]);

@@ -138,6 +138,7 @@ var streams = ((NSArray)((NSDictionary)PropertyListParser.Parse(r2.Body)).Object
     .OfType<NSDictionary>().ToDictionary(d => ((NSNumber)d.ObjectForKey("type")).ToInt());
 var videoPort = ((NSNumber)streams[110].ObjectForKey("dataPort")).ToInt();
 var audioPort = ((NSNumber)streams[96].ObjectForKey("dataPort")).ToInt();
+var audioControlPort = ((NSNumber)streams[96].ObjectForKey("controlPort")).ToInt();
 Log($"SETUP 2 → {r2.Status}, 畫面 TCP {videoPort}, 聲音 UDP {audioPort}");
 await rtsp.Send("SET_PARAMETER", "rtsp://x/1", Encoding.ASCII.GetBytes($"volume: {volume.ToString("F6", CultureInfo.InvariantCulture)}\r\n"), "text/parameters");
 
@@ -151,14 +152,34 @@ Log($"開始串流 {seconds} 秒（錄影 {accessUnits.Count} 幀，聲音 440/6
 var clock = Stopwatch.StartNew();
 int videoSent = 0, audioSent = 0;
 var nextFeedback = 2.0;
+var nextSync = 0.0;
+// Video timestamps are stream time (seconds since start) WITHOUT the 1900→1970 offset;
+// audio sync packets give NTP time WITH it, as a real iPhone does.
+const ulong Seconds1900To1970 = 2_208_988_800UL;
+static ulong ToQ32(double seconds) => (ulong)(seconds * 4294967296.0);
 while (clock.Elapsed.TotalSeconds < seconds)
 {
     var t = clock.Elapsed.TotalSeconds;
     while (videoSent / 30.0 <= t && videoSent < accessUnits.Count)
-        await video.SendAccessUnitAsync(accessUnits[videoSent++], (ulong)(videoSent / 30.0 * 4294967296.0));
+    {
+        var ts = ToQ32(videoSent / 30.0);
+        await video.SendAccessUnitAsync(accessUnits[videoSent++], ts);
+    }
     while (audioSent * 1024 / 44100.0 <= t + 0.05) // stay ~50 ms ahead like a real sender
         audio.SendFrame(audioSent++);
     if (t >= nextFeedback) { await rtsp.Send("POST", "/feedback"); nextFeedback += 2; }
+    if (t >= nextSync)
+    {
+        // 0x54 sync: "RTP timestamp rtp plays at NTP time ntp"
+        var rtpNow = (uint)(audioSent * 1024);
+        var sync = new byte[20];
+        sync[0] = nextSync == 0 ? (byte)0x90 : (byte)0x80; sync[1] = 0xD4; sync[3] = 0x04;
+        BinaryPrimitives.WriteUInt32BigEndian(sync.AsSpan(4), rtpNow);
+        BinaryPrimitives.WriteUInt64BigEndian(sync.AsSpan(8), ToQ32(rtpNow / 44100.0) + (Seconds1900To1970 << 32));
+        BinaryPrimitives.WriteUInt32BigEndian(sync.AsSpan(16), rtpNow + 7497);
+        await audioControl.SendAsync(sync, new IPEndPoint(IPAddress.Parse(host), audioControlPort));
+        nextSync += 1;
+    }
     await Task.Delay(5);
 }
 Log($"送出 {videoSent} 幀畫面、{audioSent} 幀聲音");

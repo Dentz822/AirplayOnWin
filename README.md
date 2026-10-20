@@ -14,7 +14,7 @@
 | 5 | 時間同步（NTP）、畫面串流接收與解密、存成 .h264 | ✅ 實測通過（約 30 fps） |
 | 6 | FFmpeg 解碼並顯示在 WPF 視窗 | ✅ 模擬 iPhone 測試通過 |
 | 7 | 聲音：解密、重排、補送、AAC-ELD / AAC / ALAC 解碼、喇叭播放、iPhone 音量 | ✅ 模擬 iPhone 測試通過（AAC-ELD 待實機） |
-| 8 | 影音同步 | |
+| 8 | 影音同步（畫面跟著聲音的時間軸顯示） | ✅ 模擬 iPhone 測試：平均誤差 9 ms |
 | 9 | 產品化（全螢幕、系統匣、自動啟動） | |
 | 10 | 產生可直接執行的 .exe（不需安裝 .NET） | |
 
@@ -71,6 +71,7 @@ src/AirPlay.Core/
   FairPlay/FairPlaySession.cs   FairPlay 握手與 ekey 解密（呼叫 playfair.dll）
   Crypto/AesCtr.cs              連續的 AES-128-CTR（配對與畫面解密共用）
   Timing/NtpClient.cs           與 iPhone 的 NTP 時間同步
+  Timing/PlaybackClock.cs       影音同步：把畫面與聲音的時間戳換到同一條時間軸
   Mirroring/MirrorStream.cs     畫面串流：接收、解密、AVCC 轉 Annex-B
   Audio/AudioStream.cs          音訊串流：AES-CBC 解密、依序號重排、遺失時請 iPhone 補送
   Net/PortBinder.cs             以獨占方式綁定連接埠（避免被其他程式搶走封包）
@@ -81,6 +82,7 @@ src/AirPlay.Media/
   H264Decoder.cs                FFmpeg H.264 解碼並轉成 BGRA
   AnnexBReader.cs               把錄影檔切回一幀一幀
   AudioDecoder.cs               FFmpeg 解碼 AAC-ELD / AAC / ALAC 成 16-bit PCM
+  FrameQueue.cs                 解碼好的畫面排隊，等到該播放的時間才顯示
 src/AirPlay.App/                視窗版（WPF）：即時顯示、全螢幕、聲音播放（NAudio WASAPI）
 src/AirPlay.Cli/                開發用主控台程式（含 .h264 錄影）
 native/playfair/                FairPlay C 程式（取自 UxPlay，GPL）；bin/playfair.dll 為預先編好的版本

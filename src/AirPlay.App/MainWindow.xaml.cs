@@ -6,6 +6,7 @@ using System.Windows.Media;
 using System.Windows.Media.Imaging;
 using AirPlay.Core;
 using AirPlay.Core.Identity;
+using AirPlay.Core.Timing;
 using AirPlay.Media;
 
 namespace AirPlay.App;
@@ -13,10 +14,10 @@ namespace AirPlay.App;
 public partial class MainWindow : Window
 {
     private readonly FileLog _log;
-    private readonly LatestFrame _latest = new();
+    private readonly FrameQueue _frames = new();
+    private PlaybackClock? _activeClock;
     private AirPlayReceiver? _receiver;
     private WriteableBitmap? _bitmap;
-    private long _shownVersion;
     private (int W, int H) _videoSize;
     private bool _closingDone;
 
@@ -62,8 +63,12 @@ public partial class MainWindow : Window
 
             _receiver = new AirPlayReceiver(id, new ReceiverOptions
             {
-                MirrorSinkFactory = () => new VideoPresenter(_latest, Log, OnSessionActiveChanged),
-                AudioSinkFactory = format => new AudioPlayer(format, Log),
+                MirrorSinkFactory = clock =>
+                {
+                    _activeClock = clock;
+                    return new VideoPresenter(_frames, clock, Log, OnSessionActiveChanged);
+                },
+                AudioSinkFactory = (format, clock) => new AudioPlayer(format, clock, Log),
             }, Log);
             await _receiver.StartAsync();
             Status.Text = $"{id.Name} 準備好了";
@@ -95,7 +100,7 @@ public partial class MainWindow : Window
         {
             Log($"播放錄影: {path}");
             var data = await System.IO.File.ReadAllBytesAsync(path);
-            using var presenter = new VideoPresenter(_latest, Log, OnSessionActiveChanged);
+            using var presenter = new VideoPresenter(_frames, null, Log, OnSessionActiveChanged);
             var clock = Stopwatch.StartNew();
             var n = 0;
             foreach (var au in AnnexBReader.AccessUnits(data))
@@ -122,6 +127,7 @@ public partial class MainWindow : Window
         Waiting.Visibility = active ? Visibility.Collapsed : Visibility.Visible;
         if (!active)
         {
+            _frames.Clear();
             Video.Source = null;
             _bitmap = null;
             _videoSize = default;
@@ -131,35 +137,58 @@ public partial class MainWindow : Window
 
     private int _framesThisSecond;
     private readonly Stopwatch _fpsClock = Stopwatch.StartNew();
+    // A/V sync statistics: how far each shown picture is from the audio being heard.
+    private readonly Stopwatch _syncReportClock = Stopwatch.StartNew();
+    private double _skewSumMs;
+    private int _skewCount;
 
     private void OnRendering(object? sender, EventArgs e)
     {
-        if (_latest.Version == _shownVersion || Waiting.Visibility == Visibility.Visible) return;
+        if (Waiting.Visibility == Visibility.Visible) return;
 
-        _latest.Read((w, h, pixels) =>
-        {
-            if (w == 0) return;
-            if (_bitmap is null || _bitmap.PixelWidth != w || _bitmap.PixelHeight != h)
-            {
-                _bitmap = new WriteableBitmap(w, h, 96, 96, PixelFormats.Bgr32, null);
-                Video.Source = _bitmap;
-            }
-            _bitmap.WritePixels(new Int32Rect(0, 0, w, h), pixels, w * 4, 0);
-            _shownVersion = _latest.Version;
-        });
+        // Video follows audio: with live audio, show the newest picture whose time has been reached.
+        var audibleNow = _activeClock?.AudibleRemoteNanosNow();
+        var frame = _frames.TakeDue(audibleNow);
+        if (frame is null) return;
 
-        if ((_bitmap?.PixelWidth, _bitmap?.PixelHeight) is (int bw, int bh) && (bw, bh) != _videoSize)
+        if (_bitmap is null || _bitmap.PixelWidth != frame.Width || _bitmap.PixelHeight != frame.Height)
         {
-            _videoSize = (bw, bh);
-            FitWindowToVideo(bw, bh);
+            _bitmap = new WriteableBitmap(frame.Width, frame.Height, 96, 96, PixelFormats.Bgr32, null);
+            Video.Source = _bitmap;
+        }
+        _bitmap.WritePixels(new Int32Rect(0, 0, frame.Width, frame.Height), frame.Pixels, frame.Width * 4, 0);
+        _frames.Recycle(frame.Pixels);
+
+        if (audibleNow is long heard && frame.RemoteNs is long due)
+        {
+            _skewSumMs += (heard - due) / 1e6;
+            _skewCount++;
+        }
+
+        if ((frame.Width, frame.Height) != _videoSize)
+        {
+            _videoSize = (frame.Width, frame.Height);
+            FitWindowToVideo(frame.Width, frame.Height);
         }
 
         _framesThisSecond++;
         if (_fpsClock.ElapsedMilliseconds >= 1000)
         {
-            Status.Text = $"{_videoSize.W}x{_videoSize.H}  {_framesThisSecond * 1000.0 / _fpsClock.ElapsedMilliseconds:F0} fps";
+            var sync = audibleNow is null ? "" : "  影音同步";
+            Status.Text = $"{_videoSize.W}x{_videoSize.H}  {_framesThisSecond * 1000.0 / _fpsClock.ElapsedMilliseconds:F0} fps{sync}";
             _framesThisSecond = 0;
             _fpsClock.Restart();
+        }
+
+        if (_syncReportClock.Elapsed.TotalSeconds >= 10)
+        {
+            if (_skewCount > 0)
+                Log($"     影音同步: 畫面比聲音晚 {_skewSumMs / _skewCount:F0} ms（平均，正值=畫面較晚），等待中 {_frames.Count} 幀，逾時強制顯示 {_frames.ForcedByTimeout}");
+            else
+                Log("     影音同步: 沒有聲音，畫面即時顯示");
+            _skewSumMs = 0;
+            _skewCount = 0;
+            _syncReportClock.Restart();
         }
     }
 

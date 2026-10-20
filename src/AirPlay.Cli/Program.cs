@@ -31,7 +31,7 @@ var recordDir = Path.Combine(Environment.CurrentDirectory, "recordings");
 var receiver = new AirPlayReceiver(id, new ReceiverOptions
 {
     Verbose = verbose,
-    MirrorSinkFactory = record ? () => new H264Recorder(recordDir, Log) : null,
+    MirrorSinkFactory = record ? _ => new H264Recorder(recordDir, Log) : null,
 }, Log);
 
 // ---- shutdown handling ----
