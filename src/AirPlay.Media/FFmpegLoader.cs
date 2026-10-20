@@ -16,11 +16,14 @@ public static class FFmpegLoader
             if (!_loaded)
             {
                 var baseDir = AppContext.BaseDirectory;
+                // Single-file publish extracts native DLLs to a temp folder; the host lists it here.
+                var nativeDirs = (AppContext.GetData("NATIVE_DLL_SEARCH_DIRECTORIES") as string ?? "")
+                    .Split(Path.PathSeparator, StringSplitOptions.RemoveEmptyEntries);
                 var candidates = new[]
                 {
-                    Path.Combine(baseDir, "runtimes", "win-x64", "native"),
-                    baseDir,
-                };
+                    Path.Combine(baseDir, "runtimes", "win-x64", "native"), // dotnet build / run
+                    baseDir,                                                 // publish -r win-x64
+                }.Concat(nativeDirs).ToArray();
                 var dir = candidates.FirstOrDefault(d => File.Exists(Path.Combine(d, "avcodec-61.dll")))
                     ?? throw new FileNotFoundException("找不到 FFmpeg DLL（avcodec-61.dll）", candidates[0]);
                 ffmpeg.RootPath = dir;

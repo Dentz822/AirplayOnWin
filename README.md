@@ -16,9 +16,17 @@
 | 7 | 聲音：解密、重排、補送、AAC-ELD / AAC / ALAC 解碼、喇叭播放、iPhone 音量 | ✅ 模擬 iPhone 測試通過（AAC-ELD 待實機） |
 | 8 | 影音同步（畫面跟著聲音的時間軸顯示） | ✅ 模擬 iPhone 測試：平均誤差 9 ms |
 | 9 | 產品化：設定、重新命名、開機啟動、系統匣、防火牆一鍵設定、30/60 fps、圖示 | ✅ |
-| 10 | 產生可直接執行的 .exe（不需安裝 .NET） | |
+| 10 | 產生可直接執行的 .exe（不需安裝 .NET） | ✅ `dist\WindowsAirplay.exe`，約 106 MB |
 
-## 執行
+## 執行檔
+
+```powershell
+powershell -ExecutionPolicy Bypass -File scripts\publish.ps1
+```
+產生 `dist\WindowsAirplay.exe`：單一檔案，內含 .NET、FFmpeg 和 FairPlay，Windows 10/11 x64 可直接執行，不需安裝任何東西。
+可以複製到任何資料夾或其他電腦。第一次執行會把內含的 DLL 解壓到暫存資料夾（幾秒鐘），之後就很快。
+
+## 執行（開發）
 
 1. 第一次使用時，以**系統管理員**身分開 PowerShell 設定防火牆：
    ```powershell

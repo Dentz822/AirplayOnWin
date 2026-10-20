@@ -490,3 +490,6 @@ native/playfair/obj/
 logs/
 airplay-log.txt
 recordings/
+
+# published executable
+dist/

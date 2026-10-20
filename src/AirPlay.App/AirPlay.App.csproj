@@ -34,4 +34,22 @@
     <PackageReference Include="NAudio.Wasapi" Version="2.2.1" />
   </ItemGroup>
 
+  <!-- Publishing: one self-contained WindowsAirplay.exe (see scripts\publish.ps1) -->
+  <PropertyGroup Condition="'$(PublishSingleFile)' == 'true'">
+    <SelfContained>true</SelfContained>
+    <RuntimeIdentifier>win-x64</RuntimeIdentifier>
+    <IncludeNativeLibrariesForSelfExtract>true</IncludeNativeLibrariesForSelfExtract>
+    <EnableCompressionInSingleFile>true</EnableCompressionInSingleFile>
+    <DebugType>none</DebugType>
+    <CopyOutputSymbolsToPublishDirectory>false</CopyOutputSymbolsToPublishDirectory>
+  </PropertyGroup>
+
+  <!-- Only avcodec, avutil, swscale and swresample are used; leave the other FFmpeg DLLs out. -->
+  <Target Name="DropUnusedFFmpeg" AfterTargets="ComputeResolvedFilesToPublishList">
+    <ItemGroup>
+      <ResolvedFileToPublish Remove="@(ResolvedFileToPublish)"
+        Condition="'%(Filename)' == 'avformat-61' Or '%(Filename)' == 'avfilter-10' Or '%(Filename)' == 'avdevice-61' Or '%(Filename)' == 'postproc-58'" />
+    </ItemGroup>
+  </Target>
+
 </Project>
