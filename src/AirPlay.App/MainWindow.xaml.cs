@@ -118,7 +118,8 @@ public partial class MainWindow : Window
                     return new AudioPlayer(format, clock, Log);
                 },
                 NowPlayingChanged = np => Dispatcher.BeginInvoke(() => OnNowPlaying(np)),
-                VideoPlayer = _videoHost,
+                VideoPlayer = _settings.AppVideo ? _videoHost : null,
+                PreferMirroring = () => _settings.KeepMirroring,
                 ClientConnected = (client, model) => Dispatcher.BeginInvoke(() => OnClientConnected(client)),
             }, Log);
             await _receiver.StartAsync();
@@ -350,7 +351,7 @@ public partial class MainWindow : Window
 
         // Video follows audio: with live audio, show the newest picture whose time has been reached.
         var audibleNow = _activeClock?.AudibleRemoteNanosNow();
-        var frame = _frames.TakeDue(audibleNow);
+        var frame = _frames.TakeDue(audibleNow, _activeClock?.IsPaused ?? false);
         if (frame is null) return;
 
         if (_bitmap is null || _bitmap.PixelWidth != frame.Width || _bitmap.PixelHeight != frame.Height)
@@ -456,6 +457,25 @@ public partial class MainWindow : Window
         Fps60Item.IsChecked = _settings.MaxFps == 60;
         AutoStartItem.IsChecked = StartupRegistration.IsEnabled;
         CloseToTrayItem.IsChecked = _settings.CloseToTray;
+        AppVideoItem.IsChecked = _settings.AppVideo;
+        KeepMirroringItem.IsChecked = _settings.KeepMirroring;
+        KeepMirroringItem.IsEnabled = _settings.AppVideo;
+    }
+
+    private async void AppVideo_Click(object sender, RoutedEventArgs e)
+    {
+        _settings.AppVideo = AppVideoItem.IsChecked;
+        _settings.Save();
+        Log($"App 影片直接播放: {(_settings.AppVideo ? "開" : "關")}");
+        _videoHost.Stop();
+        await StartReceiverAsync(null); // re-advertise with or without video support
+    }
+
+    private void KeepMirroring_Click(object sender, RoutedEventArgs e)
+    {
+        _settings.KeepMirroring = KeepMirroringItem.IsChecked;
+        _settings.Save();
+        Log($"螢幕鏡像時維持鏡像: {(_settings.KeepMirroring ? "開" : "關")}");
     }
 
     private void FullScreen_Click(object sender, RoutedEventArgs e) => ToggleFullScreen();

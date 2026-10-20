@@ -31,7 +31,8 @@ internal static class VideoMode
         // ---- test footage + web server ----
         var dir = Path.Combine(Path.GetTempPath(), "airplay-fake-hls");
         Directory.CreateDirectory(dir);
-        var segments = TestFootage.Write(dir, seconds, SegmentSeconds);
+        var hd = args.Contains("--1080p60");
+        var segments = TestFootage.Write(dir, seconds, SegmentSeconds, hd ? 1920 : 640, hd ? 1080 : 360, hd ? 60 : 30);
         var webPort = FreePort();
         var web = $"http://127.0.0.1:{webPort}";
         using var server = new TinyWebServer(webPort, dir);
@@ -165,7 +166,9 @@ internal static class VideoMode
         await Poll("繼續播放", 2);
         Command("POST", "/scrub?position=6.000000");
         await Poll("跳轉後", 5);
-        Command("POST", "/stop");
+        // --no-stop: leave like a phone that walks out of Wi-Fi range (just close the connections)
+        if (!args.Contains("--no-stop")) Command("POST", "/stop");
+        else Log("不送 /stop，直接斷線");
 
         Log($"FCUP 次數 {fcupRequests}：{string.Join(", ", fetchedUrls)}");
         Log($"網頁伺服器送出: {string.Join(", ", server.Served.Distinct().OrderBy(s => s))}");
@@ -246,9 +249,7 @@ internal sealed class TinyWebServer : IDisposable
 /// <summary>Writes a moving test pattern with a tone as MPEG-TS segments (H.264 + AAC).</summary>
 internal static unsafe class TestFootage
 {
-    private const int W = 640, H = 360, Fps = 30;
-
-    public static int Write(string dir, int seconds, int segmentSeconds)
+    public static int Write(string dir, int seconds, int segmentSeconds, int W, int H, int Fps)
     {
         FFmpegLoader.EnsureLoaded();
         var vcodec = ffmpeg.avcodec_find_encoder(AVCodecID.AV_CODEC_ID_H264);
@@ -302,11 +303,12 @@ internal static unsafe class TestFootage
                 var n = s * Fps * segmentSeconds + f;
                 ffmpeg.av_frame_make_writable(vf);
                 var box = n * 8 % (W - 80);
+                var boxH = H / 4;
                 for (var y = 0; y < H; y++)
                 {
                     var row = vf->data[0] + y * vf->linesize[0];
                     for (var x = 0; x < W; x++)
-                        row[x] = (byte)(x >= box && x < box + 80 && y > 140 && y < 220 ? 235 : 40 + (x + n * 2) % 160);
+                        row[x] = (byte)(x >= box && x < box + 80 && y > H / 2 - boxH / 2 && y < H / 2 + boxH / 2 ? 235 : 40 + (x + n * 2) % 160);
                 }
                 for (var y = 0; y < H / 2; y++)
                 {

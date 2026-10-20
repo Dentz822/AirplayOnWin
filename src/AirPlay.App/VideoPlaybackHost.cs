@@ -25,6 +25,7 @@ public sealed class VideoPlaybackHost : IVideoPlayer
     private bool _ready;
     private bool _ended;
     private long _lastPictureNs;
+    private long _lastDecodedNs; // newest picture or sound handed out by the player
     // Wall clock for video without sound: media time = _wallBaseNs + elapsed (frozen while paused).
     private long _wallBaseNs;
     private long _wallStartTicks;
@@ -47,6 +48,7 @@ public sealed class VideoPlaybackHost : IVideoPlayer
             _ready = false;
             _ended = false;
             _lastPictureNs = (long)(startSeconds * 1e9);
+            _lastDecodedNs = 0;
             ResetWallClock(_lastPictureNs);
             _audio = new PcmOutput(_clock, startAfter: TimeSpan.FromMilliseconds(200), maxBuffered: null,
                 capacity: TimeSpan.FromSeconds(5), _log);
@@ -57,10 +59,13 @@ public sealed class VideoPlaybackHost : IVideoPlayer
             player.Failed += message => _log($"     ⚠ 影片播放失敗：{message}");
             player.Ended += () => { lock (_lock) _ended = true; _log("     影片讀取完畢"); };
             player.Picture += OnPicture;
-            player.Sound += (pcm, ptsNs) => _audio?.Add(pcm.Span, ptsNs);
+            player.Sound += (pcm, ptsNs) =>
+            {
+                _audio?.Add(pcm.Span, ptsNs);
+                Interlocked.Exchange(ref _lastDecodedNs, Math.Max(Interlocked.Read(ref _lastDecodedNs), ptsNs));
+            };
             player.SeekDone += OnSeekDone;
-            // Read ahead at most ~1 s of video and 2 s of sound.
-            player.ShouldWait = () => _frames.Count > 30 || (_audio?.Buffered ?? TimeSpan.Zero) > TimeSpan.FromSeconds(2);
+            player.ShouldWait = ShouldWait;
             _player = player;
             player.Start(url, startSeconds);
 
@@ -86,6 +91,7 @@ public sealed class VideoPlaybackHost : IVideoPlayer
             _ready = true;
             _lastPictureNs = ptsNs;
         }
+        Interlocked.Exchange(ref _lastDecodedNs, Math.Max(Interlocked.Read(ref _lastDecodedNs), ptsNs));
         _frames.Enqueue(picture, ptsNs);
         if (first)
         {
@@ -95,8 +101,22 @@ public sealed class VideoPlaybackHost : IVideoPlayer
         }
     }
 
+    /// <summary>
+    /// Read-ahead limit, measured in time: stay at most 0.7 s ahead of what is being heard, so a
+    /// queued picture never waits longer than the frame queue's 1 s safety limit. Before sound
+    /// starts (nothing audible yet), cap by amount instead.
+    /// </summary>
+    private bool ShouldWait()
+    {
+        var audible = _clock?.AudibleRemoteNanosNow();
+        if (audible is long heard)
+            return Interlocked.Read(ref _lastDecodedNs) - heard > 700_000_000 || _frames.Count > 120;
+        return _frames.Count > 20 || (_audio?.Buffered ?? TimeSpan.Zero) > TimeSpan.FromMilliseconds(700);
+    }
+
     private void OnSeekDone()
     {
+        Interlocked.Exchange(ref _lastDecodedNs, 0);
         _frames.Clear();
         _audio?.Flush();
         lock (_lock)

@@ -11,6 +11,10 @@ public sealed class AppSettings
     public bool AlwaysOnTop { get; set; }
     /// <summary>Frame rate the iPhone is asked for: 30 or 60.</summary>
     public int MaxFps { get; set; } = 60;
+    /// <summary>App AirPlay button plays videos here (YouTube, Safari). Off = mirroring/audio only.</summary>
+    public bool AppVideo { get; set; } = true;
+    /// <summary>While screen mirroring, don't let YouTube etc. switch to video mode.</summary>
+    public bool KeepMirroring { get; set; } = true;
 
     private static string FilePath => Path.Combine(
         Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "WindowsAirplay", "settings.json");

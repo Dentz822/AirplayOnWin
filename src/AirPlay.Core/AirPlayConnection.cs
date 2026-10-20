@@ -32,6 +32,9 @@ public sealed class ReceiverOptions
     /// <summary>Plays AirPlay video (app AirPlay button); null = mirroring and audio only.</summary>
     public IVideoPlayer? VideoPlayer { get; init; }
 
+    /// <summary>While mirroring, keep mirroring instead of switching to video mode (checked live).</summary>
+    public Func<bool>? PreferMirroring { get; init; }
+
     /// <summary>Feature bits advertised to iPhones.</summary>
     public ulong Features => VideoPlayer is null
         ? AirPlayServices.Features
@@ -66,6 +69,7 @@ public sealed class AirPlayConnection : IRtspHandler, IDisposable
     private NtpClient? _ntp;
     private MirrorStream? _mirror;
     private IMirrorSink? _sink;
+    private bool _mirrorCounted; // told the video service that this connection is mirroring
     private AudioStream? _audio;
 
     /// <summary>Session AES key: FairPlay-decrypted ekey, hashed with the pairing secret.</summary>
@@ -115,6 +119,7 @@ public sealed class AirPlayConnection : IRtspHandler, IDisposable
             ("GET_PARAMETER", _) => GetParameter(req),
             ("SET_PARAMETER", _) => SetParameter(req),
             ("FLUSH", _) => Flush(),
+            ("POST", "/audioMode") => new RtspResponse(), // e.g. {"audioMode": "default"}: nothing to change
             ("TEARDOWN", _) => Teardown(req),
             _ => RtspResponse.Error(501, "Not Implemented"),
         };
@@ -325,6 +330,8 @@ public sealed class AirPlayConnection : IRtspHandler, IDisposable
             _mirror.FrameReceived += _sink.OnFrame;
         }
         _mirror.Start();
+        _video?.MirroringStarted();
+        _mirrorCounted = true;
         _log($"     畫面串流準備好 (TCP {_mirror.Port})");
 
         return new NSDictionary
@@ -457,6 +464,7 @@ public sealed class AirPlayConnection : IRtspHandler, IDisposable
         {
             _log("     iPhone 結束投影");
             StopAll();
+            _video?.SessionEnded();
         }
 
         var r = new RtspResponse();
@@ -466,6 +474,11 @@ public sealed class AirPlayConnection : IRtspHandler, IDisposable
 
     private void StopMirror()
     {
+        if (_mirrorCounted)
+        {
+            _mirrorCounted = false;
+            _video?.MirroringStopped();
+        }
         _mirror?.Dispose();
         _mirror = null;
         _sink?.Dispose();

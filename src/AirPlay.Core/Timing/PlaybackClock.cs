@@ -89,6 +89,8 @@ public sealed class PlaybackClock
         }
     }
 
+    public bool IsPaused { get { lock (_lock) return _paused; } }
+
     /// <summary>Pause freezes the audible time (video stops advancing); resume continues from it.</summary>
     public void SetPaused(bool paused)
     {

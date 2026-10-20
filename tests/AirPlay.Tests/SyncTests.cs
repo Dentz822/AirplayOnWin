@@ -94,6 +94,19 @@ public class FrameQueueTests
     }
 
     [Fact]
+    public void DoesNotForcePicturesOutWhilePaused()
+    {
+        var q = new FrameQueue();
+        q.Enqueue(Picture(1), 5_000);
+        Assert.Null(q.TakeDue(1_000, paused: true));
+        Thread.Sleep(FrameQueue.MaxHold + TimeSpan.FromMilliseconds(100));
+        Assert.Null(q.TakeDue(1_000, paused: true));   // still waiting: paused
+        Assert.Null(q.TakeDue(1_000, paused: false));  // resumed: paused time doesn't count
+        Assert.Equal(0, q.ForcedByTimeout);
+        Assert.Equal(1, q.TakeDue(5_000)!.Pixels[0]);
+    }
+
+    [Fact]
     public void BoundsTheQueue()
     {
         var q = new FrameQueue();

@@ -40,6 +40,8 @@ public sealed class AirPlayVideoService
     private readonly IVideoPlayer _player;
     private readonly int _localPort;
     private readonly Action<string> _log;
+    private readonly Func<bool> _preferMirroring;
+    private int _mirrorSessions;
     private readonly object _lock = new();
 
     private ReverseChannel? _reverse;
@@ -52,11 +54,27 @@ public sealed class AirPlayVideoService
     private double _startSeconds;
     private bool _playing;
 
-    public AirPlayVideoService(IVideoPlayer player, int localPort, Action<string> log)
+    /// <param name="preferMirroring">
+    /// While screen mirroring, refuse to switch to video mode (iOS sends /play before it ends the
+    /// mirroring), so YouTube etc. keep being mirrored as part of the phone screen.
+    /// </param>
+    public AirPlayVideoService(IVideoPlayer player, int localPort, Action<string> log, Func<bool>? preferMirroring = null)
     {
         _player = player;
         _localPort = localPort;
         _log = log;
+        _preferMirroring = preferMirroring ?? (() => true);
+    }
+
+    public void MirroringStarted() => Interlocked.Increment(ref _mirrorSessions);
+    public void MirroringStopped() => Interlocked.Decrement(ref _mirrorSessions);
+
+    /// <summary>The iPhone ended its AirPlay session (TEARDOWN): stop any video it started.</summary>
+    public void SessionEnded()
+    {
+        if (!_playing) return;
+        _log("     影片: iPhone 結束，停止播放");
+        StopPlayer();
     }
 
     /// <summary>Feature bits to add when AirPlay video is supported: bit 0 = video, bit 4 = HLS.</summary>
@@ -81,7 +99,7 @@ public sealed class AirPlayVideoService
             ("GET", "/scrub") => ScrubStatus(),
             ("POST", "/stop") => Stop(),
             ("PUT", "/setProperty") => PropertyAccepted(),
-            ("GET", "/getProperty") => new RtspResponse(),
+            ("GET" or "POST", "/getProperty") => new RtspResponse(),
             ("POST", "/fp-setup2") => DrmUnsupported(),
             ("GET", _) when path.EndsWith(".m3u8") => ServeLocalPlaylist(path),
             _ => null,
@@ -120,8 +138,14 @@ public sealed class AirPlayVideoService
             var channel = new ReverseChannel(stream);
             lock (_lock) _reverse = channel;
             await channel.RunAsync(ct);
-            lock (_lock) if (_reverse == channel) _reverse = null;
+            bool current;
+            lock (_lock)
+            {
+                current = _reverse == channel;
+                if (current) _reverse = null;
+            }
             _log("     影片: 反向連線結束");
+            if (current) SessionEnded(); // the iPhone left: don't keep playing on its own
         };
         return r;
     }
@@ -136,6 +160,12 @@ public sealed class AirPlayVideoService
         var start = plist.ObjectForKey("Start-Position-Seconds") is NSNumber s ? s.ToDouble() : 0;
         var app = plist.ObjectForKey("clientProcName")?.ToString() ?? "?";
         _log($"     影片: 播放要求 ({app}) {Shorten(location)}，從 {start:F1} 秒開始");
+
+        if (Volatile.Read(ref _mirrorSessions) > 0 && _preferMirroring())
+        {
+            _log("     影片: 目前正在螢幕鏡像，維持鏡像，不切換成影片模式");
+            return RtspResponse.Error(400, "Bad Request");
+        }
 
         lock (_lock)
         {
@@ -329,8 +359,9 @@ public sealed class AirPlayVideoService
     private RtspResponse Rate(string query)
     {
         var rate = QueryValue(query) ?? 1;
+        if (!_playing) return new RtspResponse();
         _log($"     影片: {(rate == 0 ? "暫停" : "播放")}");
-        if (_playing) _player.SetRate(rate);
+        _player.SetRate(rate);
         return new RtspResponse();
     }
 

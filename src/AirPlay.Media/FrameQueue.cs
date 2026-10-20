@@ -10,7 +10,7 @@ public sealed class QueuedFrame
     public required int Height { get; init; }
     /// <summary>Presentation time on the sender's clock (ns), or null to show at once.</summary>
     public long? RemoteNs { get; init; }
-    public long EnqueuedTicks { get; init; }
+    public long EnqueuedTicks { get; set; }
 }
 
 /// <summary>
@@ -28,6 +28,7 @@ public sealed class FrameQueue
     private readonly Queue<QueuedFrame> _queue = new();
     private readonly Stack<byte[]> _pool = new();
     private long _version;
+    private long? _pausedSinceTicks;
 
     public long Dropped { get; private set; }
     public long ForcedByTimeout { get; private set; }
@@ -59,16 +60,25 @@ public sealed class FrameQueue
     /// or null if none is due yet. <paramref name="nowRemoteNs"/> null = everything is due.
     /// Give the returned picture's buffer back with <see cref="Recycle"/> when done.
     /// </summary>
-    public QueuedFrame? TakeDue(long? nowRemoteNs)
+    /// <param name="paused">Playback is paused: pictures wait as long as needed (no 1 s safety limit).</param>
+    public QueuedFrame? TakeDue(long? nowRemoteNs, bool paused = false)
     {
         lock (_lock)
         {
             QueuedFrame? due = null;
             var now = Stopwatch.GetTimestamp();
+            if (paused) _pausedSinceTicks ??= now;
+            else if (_pausedSinceTicks is { } since)
+            {
+                // Don't count the paused time against the pictures' waiting limit.
+                var pausedTicks = now - since;
+                foreach (var f in _queue) f.EnqueuedTicks += pausedTicks;
+                _pausedSinceTicks = null;
+            }
             while (_queue.Count > 0)
             {
                 var head = _queue.Peek();
-                var heldTooLong = Stopwatch.GetElapsedTime(head.EnqueuedTicks, now) > MaxHold;
+                var heldTooLong = !paused && Stopwatch.GetElapsedTime(head.EnqueuedTicks, now) > MaxHold;
                 var isDue = nowRemoteNs is null || head.RemoteNs is null || head.RemoteNs <= nowRemoteNs || heldTooLong;
                 if (!isDue) break;
                 if (heldTooLong && nowRemoteNs is not null && head.RemoteNs > nowRemoteNs) ForcedByTimeout++;
