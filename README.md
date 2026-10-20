@@ -15,7 +15,7 @@
 | 6 | FFmpeg 解碼並顯示在 WPF 視窗 | ✅ 模擬 iPhone 測試通過 |
 | 7 | 聲音：解密、重排、補送、AAC-ELD / AAC / ALAC 解碼、喇叭播放、iPhone 音量 | ✅ 模擬 iPhone 測試通過（AAC-ELD 待實機） |
 | 8 | 影音同步（畫面跟著聲音的時間軸顯示） | ✅ 模擬 iPhone 測試：平均誤差 9 ms |
-| 9 | 產品化（全螢幕、系統匣、自動啟動） | |
+| 9 | 產品化：設定、重新命名、開機啟動、系統匣、防火牆一鍵設定、30/60 fps、圖示 | ✅ |
 | 10 | 產生可直接執行的 .exe（不需安裝 .NET） | |
 
 ## 執行
@@ -31,10 +31,21 @@
    ```
 3. iPhone 和電腦連同一個 Wi-Fi，打開「控制中心 → 螢幕鏡像輸出」，選這台電腦。
 
-視窗操作：**F11** 或**雙擊**切換全螢幕、**Esc** 離開全螢幕、**右鍵**選單（最上層顯示、開啟記錄資料夾、結束）。
-關閉視窗會先停止 mDNS 廣播，iPhone 清單裡就不會再出現這台電腦。同一時間只能開一個。
+視窗操作：**F11** 或**雙擊**切換全螢幕、**Esc** 離開全螢幕。**右鍵**選單：
 
-視窗版的記錄檔在 `%LOCALAPPDATA%\WindowsAirplay\logs\`（右鍵選單可開啟）。
+| 選單 | 說明 |
+|---|---|
+| 最上層顯示 | 視窗一直在最上面 |
+| 重新命名… | 改 iPhone 清單裡顯示的名稱，立即生效 |
+| 畫面更新率 | 30 fps（省電）或 60 fps（流暢，預設），下次連線生效 |
+| 開機時自動啟動 | 登入 Windows 時自動啟動（縮小） |
+| 關閉視窗時縮到系統匣 | 開啟後按 X 只是隱藏，iPhone 仍可連線；從系統匣圖示結束。預設關閉：按 X 就完全結束 |
+| 設定防火牆… | 一鍵建立防火牆規則（會跳出系統管理員確認）。沒設定時視窗也會提示 |
+
+- 完全結束程式時會先停止 mDNS 廣播，iPhone 清單裡就不會再出現這台電腦。
+- 同一時間只能開一個；再開一次會把原本的視窗叫到前面。
+- iPhone 開始投影時，視窗會自動跳到前面（即使縮小或在系統匣）。
+- 設定檔：`%LOCALAPPDATA%\WindowsAirplay\settings.json`；記錄檔：`%LOCALAPPDATA%\WindowsAirplay\logs\`（右鍵選單可開啟）。
 
 ### 主控台版（開發用）
 
@@ -83,7 +94,8 @@ src/AirPlay.Media/
   AnnexBReader.cs               把錄影檔切回一幀一幀
   AudioDecoder.cs               FFmpeg 解碼 AAC-ELD / AAC / ALAC 成 16-bit PCM
   FrameQueue.cs                 解碼好的畫面排隊，等到該播放的時間才顯示
-src/AirPlay.App/                視窗版（WPF）：即時顯示、全螢幕、聲音播放（NAudio WASAPI）
+src/AirPlay.App/                視窗版（WPF，輸出 WindowsAirplay.exe）：即時顯示、全螢幕、聲音播放（NAudio WASAPI）、
+                                設定、系統匣、開機啟動、防火牆設定
 src/AirPlay.Cli/                開發用主控台程式（含 .h264 錄影）
 native/playfair/                FairPlay C 程式（取自 UxPlay，GPL）；bin/playfair.dll 為預先編好的版本
 tests/AirPlay.Tests/            自動測試

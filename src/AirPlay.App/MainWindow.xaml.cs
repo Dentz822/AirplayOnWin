@@ -1,6 +1,7 @@
 ﻿using System.ComponentModel;
 using System.Diagnostics;
 using System.Windows;
+using System.Windows.Controls;
 using System.Windows.Input;
 using System.Windows.Media;
 using System.Windows.Media.Imaging;
@@ -14,12 +15,17 @@ namespace AirPlay.App;
 public partial class MainWindow : Window
 {
     private readonly FileLog _log;
+    private readonly AppSettings _settings;
     private readonly FrameQueue _frames = new();
+    private readonly TrayIcon _tray;
     private PlaybackClock? _activeClock;
     private AirPlayReceiver? _receiver;
+    private DeviceIdentity? _identity;
     private WriteableBitmap? _bitmap;
     private (int W, int H) _videoSize;
+    private bool _exitRequested;
     private bool _closingDone;
+    private bool _trayHintShown;
 
     // full screen state
     private bool _fullScreen;
@@ -27,11 +33,15 @@ public partial class MainWindow : Window
     private WindowStyle _savedStyle;
     private ResizeMode _savedResize;
 
-    public MainWindow(FileLog log)
+    public MainWindow(FileLog log, AppSettings settings, bool startMinimized)
     {
         _log = log;
+        _settings = settings;
         InitializeComponent();
-        Loaded += OnLoaded;
+        Topmost = settings.AlwaysOnTop;
+        _tray = new TrayIcon(ShowFromBackground, RequestExit);
+        if (startMinimized) WindowState = WindowState.Minimized;
+
         Closing += OnClosing;
         KeyDown += OnKeyDown;
         CompositionTarget.Rendering += OnRendering;
@@ -41,9 +51,10 @@ public partial class MainWindow : Window
 
     // ---- startup / shutdown ---------------------------------------------------------------
 
-    private async void OnLoaded(object sender, RoutedEventArgs e)
+    /// <summary>Starts receiving. Called by App right away, also when the window starts hidden in the tray.</summary>
+    public async Task InitializeAsync()
     {
-        // Developer option: AirPlay.App --play recordings\mirror-xxx.h264 replays a recording
+        // Developer option: --play recordings\mirror-xxx.h264 replays a recording
         // through the same decode/display path, without an iPhone.
         var args = Environment.GetCommandLineArgs();
         var playIndex = Array.IndexOf(args, "--play");
@@ -54,24 +65,42 @@ public partial class MainWindow : Window
             return;
         }
 
+        Log($"FFmpeg {FFmpegLoader.EnsureLoaded()}");
+        CheckFirewall();
+        await StartReceiverAsync(null);
+    }
+
+    /// <summary>Starts (or restarts, e.g. after a rename) the receiver with the saved identity.</summary>
+    private async Task StartReceiverAsync(string? newName)
+    {
         try
         {
-            Log($"FFmpeg {FFmpegLoader.EnsureLoaded()}");
-            var id = DeviceIdentity.LoadOrCreate();
-            Title = $"WindowsAirplay — {id.Name}";
-            WaitingHint.Text = $"在 iPhone 打開「控制中心」\n點「螢幕鏡像輸出」，選擇「{id.Name}」";
-
-            _receiver = new AirPlayReceiver(id, new ReceiverOptions
+            if (_receiver is not null)
             {
+                await _receiver.DisposeAsync();
+                _receiver = null;
+            }
+            _identity = DeviceIdentity.LoadOrCreate(newName);
+            var name = _identity.Name;
+            Title = $"WindowsAirplay — {name}";
+            WaitingTitle.Text = "等待 iPhone 連線";
+            WaitingHint.Text = $"在 iPhone 打開「控制中心」\n點「螢幕鏡像輸出」，選擇「{name}」";
+            _tray.Text = $"WindowsAirplay — {name}";
+
+            _receiver = new AirPlayReceiver(_identity, new ReceiverOptions
+            {
+                MaxFps = _settings.MaxFps,
+                RefreshRate = Math.Max(60, _settings.MaxFps),
                 MirrorSinkFactory = clock =>
                 {
                     _activeClock = clock;
                     return new VideoPresenter(_frames, clock, Log, OnSessionActiveChanged);
                 },
                 AudioSinkFactory = (format, clock) => new AudioPlayer(format, clock, Log),
+                ClientConnected = (client, model) => Dispatcher.BeginInvoke(() => OnClientConnected(client)),
             }, Log);
             await _receiver.StartAsync();
-            Status.Text = $"{id.Name} 準備好了";
+            Status.Text = $"{name} 準備好了（{_settings.MaxFps} fps）";
         }
         catch (Exception ex)
         {
@@ -83,13 +112,52 @@ public partial class MainWindow : Window
         }
     }
 
+    private void OnClientConnected(string client)
+    {
+        Status.Text = $"已連線：{client}";
+        _tray.Text = $"WindowsAirplay — {client} 投影中";
+        // Bring the window forward when mirroring starts, even if it was minimized or in the tray.
+        ShowFromBackground();
+    }
+
+    /// <summary>Shows the window from the tray / minimized state and brings it to the front.</summary>
+    public void ShowFromBackground()
+    {
+        if (!IsVisible) Show();
+        if (WindowState == WindowState.Minimized) WindowState = WindowState.Normal;
+        Activate();
+        Topmost = true;      // reliable way to come to the front...
+        Topmost = _settings.AlwaysOnTop; // ...then restore the user's choice
+    }
+
+    private void RequestExit()
+    {
+        _exitRequested = true;
+        Close();
+    }
+
     private async void OnClosing(object? sender, CancelEventArgs e)
     {
-        if (_closingDone || _receiver is null) return;
+        if (_closingDone) return;
+
+        if (_settings.CloseToTray && !_exitRequested)
+        {
+            // Keep receiving in the background; the tray icon brings the window back.
+            e.Cancel = true;
+            Hide();
+            if (!_trayHintShown)
+            {
+                _tray.ShowBalloon("WindowsAirplay 仍在執行", "在系統匣圖示按右鍵可以結束。");
+                _trayHintShown = true;
+            }
+            return;
+        }
+
         // Withdraw mDNS before the window disappears, so iPhones stop listing this PC.
         e.Cancel = true;
         Hide();
-        await _receiver.DisposeAsync();
+        _tray.Dispose();
+        if (_receiver is not null) await _receiver.DisposeAsync();
         _closingDone = true;
         Close();
     }
@@ -118,7 +186,48 @@ public partial class MainWindow : Window
     }
 
     /// <summary>Logoff / shutdown: no time for async, stop synchronously.</summary>
-    public void StopForSessionEnd() => _receiver?.Stop(TimeSpan.FromSeconds(4));
+    public void StopForSessionEnd()
+    {
+        _tray.Dispose();
+        _receiver?.Stop(TimeSpan.FromSeconds(4));
+    }
+
+    // ---- firewall ----------------------------------------------------------------------------
+
+    private void CheckFirewall()
+    {
+        var rules = FirewallSetup.RulesPresent();
+        var publicNets = FirewallSetup.PublicNetworks();
+        Log($"防火牆規則: {(rules switch { true => "已設定", false => "未設定", null => "無法檢查" })}" +
+            (publicNets.Count > 0 ? $"，公用網路: {string.Join(", ", publicNets)}" : ""));
+
+        if (rules == false)
+        {
+            FirewallText.Text = "防火牆還沒設定，iPhone 可能連不進來。";
+            FirewallButton.Visibility = Visibility.Visible;
+            FirewallBanner.Visibility = Visibility.Visible;
+        }
+        else if (publicNets.Count > 0)
+        {
+            FirewallText.Text = $"網路「{string.Join("、", publicNets)}」是「公用」，iPhone 會連不進來。\n" +
+                                "請到 設定 → 網路和網際網路 把它改成「私人網路」。";
+            FirewallButton.Visibility = Visibility.Collapsed;
+            FirewallBanner.Visibility = Visibility.Visible;
+        }
+        else
+        {
+            FirewallBanner.Visibility = Visibility.Collapsed;
+        }
+    }
+
+    private async void Firewall_Click(object sender, RoutedEventArgs e)
+    {
+        Log("設定防火牆（UAC）");
+        var ok = await Task.Run(FirewallSetup.CreateRules);
+        Log(ok ? "防火牆規則已建立" : "防火牆設定取消或失敗");
+        if (!ok) MessageBox.Show(this, "防火牆沒有設定成功（可能按了「否」）。", "WindowsAirplay");
+        CheckFirewall();
+    }
 
     // ---- video ------------------------------------------------------------------------------
 
@@ -132,6 +241,7 @@ public partial class MainWindow : Window
             _bitmap = null;
             _videoSize = default;
             Status.Text = "投影已結束";
+            _tray.Text = $"WindowsAirplay — {_identity?.Name}";
         }
     });
 
@@ -203,16 +313,14 @@ public partial class MainWindow : Window
         var maxW = work.Width * 0.9 - chromeW;
         var maxH = work.Height * 0.9 - chromeH;
         var scale = Math.Min(maxW / videoW, maxH / videoH);
-        var contentW = videoW * scale;
-        var contentH = videoH * scale;
 
-        Width = contentW + chromeW;
-        Height = contentH + chromeH;
+        Width = videoW * scale + chromeW;
+        Height = videoH * scale + chromeH;
         Left = work.Left + (work.Width - Width) / 2;
         Top = work.Top + (work.Height - Height) / 2;
     }
 
-    // ---- full screen & menu -----------------------------------------------------------------
+    // ---- full screen ----------------------------------------------------------------------
 
     private void ToggleFullScreen()
     {
@@ -247,12 +355,58 @@ public partial class MainWindow : Window
         if (e.ClickCount == 2) ToggleFullScreen();
     }
 
+    // ---- menu -----------------------------------------------------------------------------
+
+    private void Menu_Opened(object sender, RoutedEventArgs e)
+    {
+        TopmostItem.IsChecked = _settings.AlwaysOnTop;
+        Fps30Item.IsChecked = _settings.MaxFps == 30;
+        Fps60Item.IsChecked = _settings.MaxFps == 60;
+        AutoStartItem.IsChecked = StartupRegistration.IsEnabled;
+        CloseToTrayItem.IsChecked = _settings.CloseToTray;
+    }
+
     private void FullScreen_Click(object sender, RoutedEventArgs e) => ToggleFullScreen();
 
-    private void Topmost_Click(object sender, RoutedEventArgs e) => Topmost = TopmostItem.IsChecked;
+    private void Topmost_Click(object sender, RoutedEventArgs e)
+    {
+        _settings.AlwaysOnTop = TopmostItem.IsChecked;
+        Topmost = _settings.AlwaysOnTop;
+        _settings.Save();
+    }
+
+    private async void Rename_Click(object sender, RoutedEventArgs e)
+    {
+        var dialog = new RenameDialog(_identity?.Name ?? Environment.MachineName) { Owner = this };
+        if (dialog.ShowDialog() != true || dialog.NewName == _identity?.Name) return;
+        Log($"重新命名為「{dialog.NewName}」");
+        await StartReceiverAsync(dialog.NewName); // re-advertise under the new name
+    }
+
+    private async void Fps_Click(object sender, RoutedEventArgs e)
+    {
+        var fps = int.Parse((string)((MenuItem)sender).Tag);
+        if (fps == _settings.MaxFps) return;
+        _settings.MaxFps = fps;
+        _settings.Save();
+        Log($"畫面更新率改為 {fps} fps");
+        await StartReceiverAsync(null); // applies to the next connection
+    }
+
+    private void AutoStart_Click(object sender, RoutedEventArgs e)
+    {
+        StartupRegistration.Set(AutoStartItem.IsChecked);
+        Log($"開機自動啟動: {(AutoStartItem.IsChecked ? "開" : "關")}");
+    }
+
+    private void CloseToTray_Click(object sender, RoutedEventArgs e)
+    {
+        _settings.CloseToTray = CloseToTrayItem.IsChecked;
+        _settings.Save();
+    }
 
     private void OpenLogs_Click(object sender, RoutedEventArgs e) =>
         Process.Start(new ProcessStartInfo("explorer.exe", $"\"{FileLog.DefaultDirectory}\"") { UseShellExecute = true });
 
-    private void Exit_Click(object sender, RoutedEventArgs e) => Close();
+    private void Exit_Click(object sender, RoutedEventArgs e) => RequestExit();
 }

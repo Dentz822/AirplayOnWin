@@ -6,7 +6,9 @@ namespace AirPlay.App;
 
 public partial class App : Application
 {
+    private const string InstanceName = @"Local\WindowsAirplay.App";
     private Mutex? _singleInstance;
+    private EventWaitHandle? _showSignal;
     private FileLog? _log;
     private MainWindow? _window;
 
@@ -14,25 +16,34 @@ public partial class App : Application
     {
         base.OnStartup(e);
 
-        // Only one receiver per PC: a second one would fight over port 7000 and the mDNS name.
-        _singleInstance = new Mutex(true, @"Local\WindowsAirplay.App", out var isFirst);
+        // Only one receiver per PC (port 7000 and the mDNS name). A second launch just brings
+        // the running one to the front.
+        _singleInstance = new Mutex(true, InstanceName, out var isFirst);
+        _showSignal = new EventWaitHandle(false, EventResetMode.AutoReset, InstanceName + ".Show");
         if (!isFirst)
         {
-            MessageBox.Show("WindowsAirplay 已經在執行了。", "WindowsAirplay", MessageBoxButton.OK, MessageBoxImage.Information);
+            _showSignal.Set();
             Shutdown();
             return;
         }
 
         _log = new FileLog(FileLog.DefaultDirectory, "app");
-        _log.Write($"WindowsAirplay 啟動，記錄檔: {_log.Path}");
+        _log.Write($"WindowsAirplay {typeof(App).Assembly.GetName().Version} 啟動，記錄檔: {_log.Path}");
 
         DispatcherUnhandledException += OnUiException;
         AppDomain.CurrentDomain.UnhandledException += (_, ev) => _log?.Write($"未處理的例外: {ev.ExceptionObject}");
         TaskScheduler.UnobservedTaskException += (_, ev) => { _log?.Write($"未觀察的工作例外: {ev.Exception}"); ev.SetObserved(); };
 
-        _window = new MainWindow(_log);
+        var settings = AppSettings.Load();
+        var minimized = e.Args.Contains(StartupRegistration.MinimizedArgument);
+        _window = new MainWindow(_log, settings, minimized);
         MainWindow = _window;
-        _window.Show();
+        if (!(minimized && settings.CloseToTray)) _window.Show(); // tray mode: stay hidden until a session starts
+        _ = _window.InitializeAsync();
+
+        // Wait for "show yourself" from a second launch.
+        ThreadPool.RegisterWaitForSingleObject(_showSignal,
+            (_, _) => Dispatcher.BeginInvoke(() => _window?.ShowFromBackground()), null, Timeout.Infinite, false);
     }
 
     private void OnUiException(object sender, DispatcherUnhandledExceptionEventArgs e)
@@ -53,6 +64,7 @@ public partial class App : Application
         _log?.Write("WindowsAirplay 結束");
         _log?.Dispose();
         _singleInstance?.Dispose();
+        _showSignal?.Dispose();
         base.OnExit(e);
     }
 }

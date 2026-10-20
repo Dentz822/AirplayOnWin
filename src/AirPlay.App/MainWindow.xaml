@@ -2,14 +2,24 @@
         xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
         Title="WindowsAirplay"
+        Icon="Assets/app.ico"
         Width="480" Height="860" MinWidth="240" MinHeight="240"
         Background="Black"
         WindowStartupLocation="CenterScreen">
     <Grid x:Name="Root" Background="Black" MouseLeftButtonDown="Root_MouseLeftButtonDown">
         <Grid.ContextMenu>
-            <ContextMenu>
+            <ContextMenu Opened="Menu_Opened">
                 <MenuItem Header="全螢幕" InputGestureText="F11" Click="FullScreen_Click" />
                 <MenuItem x:Name="TopmostItem" Header="最上層顯示" IsCheckable="True" Click="Topmost_Click" />
+                <Separator />
+                <MenuItem x:Name="RenameItem" Header="重新命名…" Click="Rename_Click" />
+                <MenuItem Header="畫面更新率">
+                    <MenuItem x:Name="Fps30Item" Header="30 fps（較省電）" IsCheckable="True" Click="Fps_Click" Tag="30" />
+                    <MenuItem x:Name="Fps60Item" Header="60 fps（較流暢）" IsCheckable="True" Click="Fps_Click" Tag="60" />
+                </MenuItem>
+                <MenuItem x:Name="AutoStartItem" Header="開機時自動啟動" IsCheckable="True" Click="AutoStart_Click" />
+                <MenuItem x:Name="CloseToTrayItem" Header="關閉視窗時縮到系統匣" IsCheckable="True" Click="CloseToTray_Click" />
+                <MenuItem Header="設定防火牆…" Click="Firewall_Click" />
                 <Separator />
                 <MenuItem Header="開啟記錄資料夾" Click="OpenLogs_Click" />
                 <Separator />
@@ -24,6 +34,19 @@
                        HorizontalAlignment="Center" Margin="0,0,0,16" />
             <TextBlock x:Name="WaitingHint" Foreground="#B0B0B0" FontSize="14" TextAlignment="Center"
                        TextWrapping="Wrap" LineHeight="22" />
+
+            <Border x:Name="FirewallBanner" Visibility="Collapsed" Margin="0,24,0,0" Padding="14,10"
+                    CornerRadius="6" Background="#33FFB020" BorderBrush="#FFB020" BorderThickness="1">
+                <StackPanel>
+                    <TextBlock x:Name="FirewallText" Foreground="#FFD27A" TextWrapping="Wrap" TextAlignment="Center"
+                               Text="防火牆還沒設定，iPhone 可能連不進來。" />
+                    <Button x:Name="FirewallButton" Content="設定防火牆（需要系統管理員確認）" Margin="0,8,0,0"
+                            Padding="10,4" HorizontalAlignment="Center" Click="Firewall_Click" />
+                </StackPanel>
+            </Border>
+
+            <TextBlock Foreground="#707070" FontSize="12" TextAlignment="Center" Margin="0,24,0,0"
+                       Text="右鍵：選單　F11 / 雙擊：全螢幕" />
         </StackPanel>
 
         <TextBlock x:Name="Status" Foreground="#80FFFFFF" FontSize="11" Margin="8,0,0,6"

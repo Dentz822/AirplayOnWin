@@ -25,6 +25,8 @@ public sealed class ReceiverOptions
     public Func<PlaybackClock, IMirrorSink>? MirrorSinkFactory { get; init; }
     /// <summary>Creates a player for each audio stream (null = receive and discard).</summary>
     public Func<AudioFormat, PlaybackClock, IAudioSink>? AudioSinkFactory { get; init; }
+    /// <summary>Called when an iPhone starts a session: (device name, model).</summary>
+    public Action<string, string>? ClientConnected { get; init; }
 }
 
 /// <summary>Receives the decoded-ready H.264 of one mirroring session.</summary>
@@ -250,6 +252,7 @@ public sealed class AirPlayConnection : IRtspHandler, IDisposable
             AesKey = _pairing.SharedSecret is { } secret ? SHA512.HashData([.. key, .. secret])[..16] : key;
             AesIv = (plist.ObjectForKey("eiv") as NSData)?.Bytes;
             _log($"     FairPlay 解出金鑰 ✓  來源: {plist.ObjectForKey("name")} ({plist.ObjectForKey("model")}, iOS {plist.ObjectForKey("osVersion")})");
+            _options.ClientConnected?.Invoke(plist.ObjectForKey("name")?.ToString() ?? "iPhone", plist.ObjectForKey("model")?.ToString() ?? "");
 
             if (plist.ObjectForKey("timingPort") is NSNumber timingPort)
             {
