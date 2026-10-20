@@ -108,6 +108,33 @@ public class FairPlayTests
     }
 
     [Fact]
+    public void RejectsKeyMessageWithOutOfRangeMode()
+    {
+        var request = new byte[164];
+        "FPLY"u8.CopyTo(request);
+        request[4] = 0x03;
+        request[12] = 0xA1; // would index past playfair's 4-entry tables
+        Assert.Throws<FairPlayException>(() => new FairPlaySession().Setup(request));
+    }
+
+    [Fact]
+    public void DecryptIsDeterministicForValidModes()
+    {
+        for (byte mode = 0; mode < 4; mode++)
+        {
+            var request = Enumerable.Range(0, 164).Select(i => (byte)(i * 13 + 5)).ToArray();
+            "FPLY"u8.CopyTo(request);
+            request[4] = 0x03;
+            request[12] = mode;
+            var fp = new FairPlaySession();
+            fp.Setup(request);
+            var ekey = Enumerable.Range(0, 72).Select(i => (byte)(i * 7 + 1)).ToArray();
+            var first = fp.DecryptKey(ekey);
+            for (var i = 0; i < 5; i++) Assert.Equal(first, fp.DecryptKey(ekey));
+        }
+    }
+
+    [Fact]
     public void RejectsUnknownFairPlayType()
     {
         var request = new byte[16];

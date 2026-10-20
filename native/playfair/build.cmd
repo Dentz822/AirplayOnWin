@@ -8,7 +8,7 @@ if not exist bin mkdir bin
 set SOURCES=fairplay_export.c src\playfair.c src\omg_hax.c src\hand_garble.c src\modified_md5.c src\sap_hash.c
 
 if defined ZIG (
-  "%ZIG%" cc -shared -O2 -target x86_64-windows-gnu -w -o bin\playfair.dll %SOURCES% || exit /b 1
+  "%ZIG%" cc -shared -O2 -fno-strict-aliasing -target x86_64-windows-gnu -w -o bin\playfair.dll %SOURCES% || exit /b 1
   del /q bin\*.lib bin\*.pdb 2>nul
   goto done
 )

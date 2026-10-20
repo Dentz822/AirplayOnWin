@@ -46,6 +46,8 @@ EXPORT int fp_setup(const unsigned char req[16], unsigned char res[142])
 EXPORT int fp_handshake(const unsigned char req[164], unsigned char res[32])
 {
     if (req[4] != 0x03) return -1;
+    /* playfair later uses req[12] as an index into 4-entry tables: reject anything else */
+    if (req[12] > 3) return -2;
     memcpy(res, fp_header, 12);
     memcpy(res + 12, req + 144, 20);
     return 0;

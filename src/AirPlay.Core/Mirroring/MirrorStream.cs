@@ -5,6 +5,7 @@ using System.Net.Sockets;
 using System.Security.Cryptography;
 using System.Text;
 using AirPlay.Core.Crypto;
+using AirPlay.Core.Net;
 
 namespace AirPlay.Core.Mirroring;
 
@@ -52,14 +53,7 @@ public sealed class MirrorStream : IDisposable
         var (key, iv) = DeriveKey(aesKey, streamConnectionId);
         _cipher = new AesCtr(key, iv);
 
-        _listener = new TcpListener(IPAddress.Any, PreferredPort);
-        try { _listener.Start(); }
-        catch (SocketException)
-        {
-            _listener = new TcpListener(IPAddress.Any, 0);
-            _listener.Start();
-            _log($"     ⚠ TCP {PreferredPort} 被占用，改用 {Port}（防火牆可能會擋）");
-        }
+        _listener = PortBinder.ListenTcp(PreferredPort, log);
     }
 
     /// <summary>key = SHA-512("AirPlayStreamKey{id}" | aesKey)[0..16], iv likewise with "AirPlayStreamIV{id}".</summary>

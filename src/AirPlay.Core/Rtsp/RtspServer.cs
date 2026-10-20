@@ -11,7 +11,8 @@ public sealed class RtspServer(int port, Func<RtspConnectionInfo, IRtspHandler> 
 {
     public async Task RunAsync(CancellationToken ct)
     {
-        var listener = new TcpListener(IPAddress.Any, port);
+        // Exclusive: a second receiver (or another program) on the same port must fail loudly.
+        var listener = new TcpListener(IPAddress.Any, port) { ExclusiveAddressUse = true };
         listener.Start();
         var connections = new List<Task>();
         try

@@ -2,6 +2,7 @@ using System.Buffers.Binary;
 using System.Diagnostics;
 using System.Net;
 using System.Net.Sockets;
+using AirPlay.Core.Net;
 
 namespace AirPlay.Core.Timing;
 
@@ -32,7 +33,7 @@ public sealed class NtpClient : IDisposable
     {
         _remote = new IPEndPoint(remoteAddress, remotePort);
         _log = log;
-        _udp = BindUdp(PreferredPort);
+        _udp = PortBinder.BindUdp(PreferredPort, log);
     }
 
     public void Start() => _loop = RunAsync(_cts.Token);
@@ -94,12 +95,6 @@ public sealed class NtpClient : IDisposable
             try { await Task.Delay(count < 5 ? 250 : 3000, ct); }
             catch (OperationCanceledException) { break; }
         }
-    }
-
-    internal static UdpClient BindUdp(int preferredPort)
-    {
-        try { return new UdpClient(new IPEndPoint(IPAddress.Any, preferredPort)); }
-        catch (SocketException) { return new UdpClient(new IPEndPoint(IPAddress.Any, 0)); }
     }
 
     public void Dispose()

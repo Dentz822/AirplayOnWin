@@ -23,6 +23,8 @@ public sealed class ReceiverOptions
     public bool Verbose { get; init; }
     /// <summary>Creates a consumer for each mirroring session's video (null = discard).</summary>
     public Func<IMirrorSink>? MirrorSinkFactory { get; init; }
+    /// <summary>Creates a player for each audio stream (null = receive and discard).</summary>
+    public Func<AudioFormat, IAudioSink>? AudioSinkFactory { get; init; }
 }
 
 /// <summary>Receives the decoded-ready H.264 of one mirroring session.</summary>
@@ -87,7 +89,7 @@ public sealed class AirPlayConnection : IRtspHandler, IDisposable
             ("RECORD", _) => Record(),
             ("GET_PARAMETER", _) => GetParameter(req),
             ("SET_PARAMETER", _) => SetParameter(req),
-            ("FLUSH", _) => new RtspResponse(),
+            ("FLUSH", _) => Flush(),
             ("TEARDOWN", _) => Teardown(req),
             _ => RtspResponse.Error(501, "Not Implemented"),
         };
@@ -308,11 +310,24 @@ public sealed class AirPlayConnection : IRtspHandler, IDisposable
 
     private NSDictionary SetupAudio(NSDictionary stream)
     {
+        if (AesKey is null || AesIv is null) throw new InvalidOperationException("audio SETUP before key exchange");
         var ct = (stream.ObjectForKey("ct") as NSNumber)?.ToInt() ?? 0;
+        var spf = (stream.ObjectForKey("spf") as NSNumber)?.ToInt() ?? 0;
+        var remoteControlPort = (stream.ObjectForKey("controlPort") as NSNumber)?.ToInt() ?? 0;
+        var format = new AudioFormat(ct, spf);
+
         _audio?.Dispose();
-        _audio = new AudioStream(ct, _log);
+        IAudioSink? sink = null;
+        try { sink = _options.AudioSinkFactory?.Invoke(format); }
+        catch (Exception ex) { _log($"     ⚠ 無法建立音訊播放: {ex.Message}"); }
+        sink?.SetVolume(Volume);
+
+        var remoteControl = remoteControlPort > 0
+            ? new System.Net.IPEndPoint(_connection.Remote.Address, remoteControlPort)
+            : null;
+        _audio = new AudioStream(format, AesKey, AesIv, remoteControl, sink, _log);
         _audio.Start();
-        _log($"     音訊串流準備好: {AudioStream.CodecName(ct)} (UDP {_audio.DataPort}/{_audio.ControlPort})，第 7 階段才會解碼");
+        _log($"     音訊串流準備好: {format.CodecName}, 每幀 {spf} 樣本 (UDP {_audio.DataPort}/{_audio.ControlPort}){(sink is null ? "，不播放" : "")}");
 
         return new NSDictionary
         {
@@ -320,6 +335,12 @@ public sealed class AirPlayConnection : IRtspHandler, IDisposable
             { "dataPort", new NSNumber(_audio.DataPort) },
             { "controlPort", new NSNumber(_audio.ControlPort) },
         };
+    }
+
+    private RtspResponse Flush()
+    {
+        _audio?.Flush();
+        return new RtspResponse();
     }
 
     private static RtspResponse Record()
@@ -352,6 +373,7 @@ public sealed class AirPlayConnection : IRtspHandler, IDisposable
                     double.TryParse(line[7..].Trim(), NumberStyles.Float, CultureInfo.InvariantCulture, out var v))
                 {
                     Volume = v;
+                    _audio?.SetVolume(v);
                     _log($"     音量: {v:F1} dB");
                 }
             }

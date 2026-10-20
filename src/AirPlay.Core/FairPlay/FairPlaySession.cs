@@ -30,6 +30,9 @@ public sealed class FairPlaySession
             }
             case 164:
             {
+                // Byte 12 is the key mode (0-3); playfair indexes 4-entry tables with it.
+                if (request[4] != 0x03 || request[12] > 3)
+                    throw new FairPlayException($"invalid FairPlay key message (type 0x{request[4]:X2}, mode {request[12]})");
                 var reply = new byte[32];
                 var rc = Native.fp_handshake(request, reply);
                 if (rc != 0) throw new FairPlayException($"fp_handshake failed ({rc})");

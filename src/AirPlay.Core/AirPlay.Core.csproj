@@ -13,6 +13,10 @@
   </ItemGroup>
 
   <ItemGroup>
+    <InternalsVisibleTo Include="AirPlay.Tests" />
+  </ItemGroup>
+
+  <ItemGroup>
     <!-- FairPlay (playfair) native library, built by native\playfair\build.cmd -->
     <None Include="..\..\native\playfair\bin\playfair.dll" Link="playfair.dll" CopyToOutputDirectory="PreserveNewest" />
   </ItemGroup>

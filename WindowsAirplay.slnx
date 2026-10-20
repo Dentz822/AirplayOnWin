@@ -1,9 +1,14 @@
 <Solution>
   <Folder Name="/src/">
+    <Project Path="src/AirPlay.App/AirPlay.App.csproj" />
     <Project Path="src/AirPlay.Cli/AirPlay.Cli.csproj" />
     <Project Path="src/AirPlay.Core/AirPlay.Core.csproj" />
+    <Project Path="src/AirPlay.Media/AirPlay.Media.csproj" />
   </Folder>
   <Folder Name="/tests/">
     <Project Path="tests/AirPlay.Tests/AirPlay.Tests.csproj" />
+  </Folder>
+  <Folder Name="/tools/">
+    <Project Path="tools/AirPlay.FakeSender/AirPlay.FakeSender.csproj" />
   </Folder>
 </Solution>

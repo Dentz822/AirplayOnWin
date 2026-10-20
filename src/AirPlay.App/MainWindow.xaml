@@ -1,0 +1,32 @@
+﻿<Window x:Class="AirPlay.App.MainWindow"
+        xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        Title="WindowsAirplay"
+        Width="480" Height="860" MinWidth="240" MinHeight="240"
+        Background="Black"
+        WindowStartupLocation="CenterScreen">
+    <Grid x:Name="Root" Background="Black" MouseLeftButtonDown="Root_MouseLeftButtonDown">
+        <Grid.ContextMenu>
+            <ContextMenu>
+                <MenuItem Header="全螢幕" InputGestureText="F11" Click="FullScreen_Click" />
+                <MenuItem x:Name="TopmostItem" Header="最上層顯示" IsCheckable="True" Click="Topmost_Click" />
+                <Separator />
+                <MenuItem Header="開啟記錄資料夾" Click="OpenLogs_Click" />
+                <Separator />
+                <MenuItem Header="結束" Click="Exit_Click" />
+            </ContextMenu>
+        </Grid.ContextMenu>
+
+        <Image x:Name="Video" Stretch="Uniform" RenderOptions.BitmapScalingMode="HighQuality" />
+
+        <StackPanel x:Name="Waiting" VerticalAlignment="Center" HorizontalAlignment="Center" Margin="24">
+            <TextBlock x:Name="WaitingTitle" Text="等待 iPhone 連線" Foreground="White" FontSize="22"
+                       HorizontalAlignment="Center" Margin="0,0,0,16" />
+            <TextBlock x:Name="WaitingHint" Foreground="#B0B0B0" FontSize="14" TextAlignment="Center"
+                       TextWrapping="Wrap" LineHeight="22" />
+        </StackPanel>
+
+        <TextBlock x:Name="Status" Foreground="#80FFFFFF" FontSize="11" Margin="8,0,0,6"
+                   VerticalAlignment="Bottom" HorizontalAlignment="Left" IsHitTestVisible="False" />
+    </Grid>
+</Window>
