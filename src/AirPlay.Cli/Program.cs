@@ -13,9 +13,25 @@ for (var i = 0; i < args.Length; i++)
 }
 
 Console.OutputEncoding = System.Text.Encoding.UTF8;
-var logLock = new object();
-void Log(string msg) { lock (logLock) Console.WriteLine($"{DateTime.Now:HH:mm:ss.fff} {msg}"); }
 
+// Every run also writes a UTF-8 log file, so no "| Tee-Object" is needed
+// (Windows PowerShell 5.1 re-decodes piped output as Big5 and garbles the Chinese text).
+var logDir = Path.Combine(Environment.CurrentDirectory, "logs");
+Directory.CreateDirectory(logDir);
+var logPath = Path.Combine(logDir, $"airplay-{DateTime.Now:yyyyMMdd-HHmmss}.log");
+using var logFile = new StreamWriter(logPath, false, new System.Text.UTF8Encoding(false)) { AutoFlush = true };
+var logLock = new object();
+void Log(string msg)
+{
+    var line = $"{DateTime.Now:HH:mm:ss.fff} {msg}";
+    lock (logLock)
+    {
+        Console.WriteLine(line);
+        logFile.WriteLine(line);
+    }
+}
+
+Log($"記錄檔: {logPath}");
 var id = DeviceIdentity.LoadOrCreate(name);
 Log($"裝置名稱: {id.Name}");
 Log($"Device ID: {id.DeviceId}");

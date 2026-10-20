@@ -1,7 +1,22 @@
 /*
- * FairPlay (SAP v1, type 0x03) exports for WindowsAirplay, adapted from UxPlay's
- * lib/fairplay_playfair.c (https://github.com/FDH2/UxPlay, commit 4e95a9e).
- * The reply tables below are copied verbatim; playfair itself is GPL (see src/LICENSE.md).
+ *  Copyright (C) 2018  Juho Vähä-Herttua
+ *
+ *  This library is free software; you can redistribute it and/or
+ *  modify it under the terms of the GNU Lesser General Public
+ *  License as published by the Free Software Foundation; either
+ *  version 2.1 of the License, or (at your option) any later version.
+ *
+ *  This library is distributed in the hope that it will be useful,
+ *  but WITHOUT ANY WARRANTY; without even the implied warranty of
+ *  MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
+ *  Lesser General Public License for more details.
+ *
+ *==================================================================
+ * Modified for WindowsAirplay (2026): turned into DLL exports
+ * (fp_setup / fp_handshake / fp_decrypt) with the session state kept by the caller.
+ * Adapted from UxPlay's lib/fairplay_playfair.c
+ * (https://github.com/FDH2/UxPlay, commit 4e95a9e); the reply tables are copied verbatim.
+ * The playfair code it calls is GPL-3.0 (see src/LICENSE.md), so the built DLL is GPL-3.0.
  */
 #include <string.h>
 #include "src/playfair.h"
