@@ -71,6 +71,11 @@ public sealed class RtspServer(int port, Func<RtspConnectionInfo, IRtspHandler> 
                     response.Headers.TryAdd("Server", "AirTunes/220.68");
                     if (request.Header("CSeq") is { } cseq) response.Headers["CSeq"] = cseq;
                     await stream.WriteAsync(response.Serialize(request.Protocol), ct);
+                    if (response.TakeOver is { } takeOver)
+                    {
+                        await takeOver(stream, ct);
+                        break;
+                    }
                     if (response.Disconnect) break;
                 }
             }

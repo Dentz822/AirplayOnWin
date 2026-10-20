@@ -10,6 +10,7 @@ using AirPlay.Core.Mirroring;
 using AirPlay.Core.Pairing;
 using AirPlay.Core.Rtsp;
 using AirPlay.Core.Timing;
+using AirPlay.Core.Video;
 using Claunia.PropertyList;
 
 namespace AirPlay.Core;
@@ -28,6 +29,14 @@ public sealed class ReceiverOptions
     public Func<AudioFormat, PlaybackClock, IAudioSink>? AudioSinkFactory { get; init; }
     /// <summary>Called when an iPhone starts a session: (device name, model).</summary>
     public Action<string, string>? ClientConnected { get; init; }
+    /// <summary>Plays AirPlay video (app AirPlay button); null = mirroring and audio only.</summary>
+    public IVideoPlayer? VideoPlayer { get; init; }
+
+    /// <summary>Feature bits advertised to iPhones.</summary>
+    public ulong Features => VideoPlayer is null
+        ? AirPlayServices.Features
+        : AirPlayServices.Features | AirPlayVideoService.FeatureBits;
+
     /// <summary>Track info / album art / progress changed (null = session ended).</summary>
     public Action<NowPlaying?>? NowPlayingChanged { get; init; }
 }
@@ -52,6 +61,7 @@ public sealed class AirPlayConnection : IRtspHandler, IDisposable
     private readonly PairingSession _pairing;
     private readonly FairPlaySession _fairPlay = new();
     private readonly PlaybackClock _clock = new(); // shared by this session's video and audio
+    private readonly AirPlayVideoService? _video;   // receiver-wide AirPlay video (null = unsupported)
 
     private NtpClient? _ntp;
     private MirrorStream? _mirror;
@@ -65,8 +75,10 @@ public sealed class AirPlayConnection : IRtspHandler, IDisposable
     public double Volume { get; private set; }
     public NowPlaying? NowPlaying { get; private set; }
 
-    public AirPlayConnection(DeviceIdentity id, ReceiverOptions options, RtspConnectionInfo connection, Action<string> log)
+    public AirPlayConnection(DeviceIdentity id, ReceiverOptions options, RtspConnectionInfo connection, Action<string> log,
+        AirPlayVideoService? video = null)
     {
+        _video = video;
         _id = id;
         _options = options;
         _connection = connection;
@@ -76,7 +88,8 @@ public sealed class AirPlayConnection : IRtspHandler, IDisposable
 
     public Task<RtspResponse> HandleAsync(RtspRequest req, CancellationToken ct)
     {
-        var quiet = req.Uri == "/feedback"; // keep-alive every 2 s
+        // keep-alive every 2 s, playback polling every second, the local player fetching playlists
+        var quiet = req.Uri is "/feedback" or "/playback-info" || req.Uri.EndsWith(".m3u8");
         if (!quiet || _options.Verbose)
         {
             _log($"  >> {req.Method} {req.Uri}{(req.Body.Length > 0 ? $" ({req.Body.Length} bytes)" : "")}");
@@ -84,6 +97,11 @@ public sealed class AirPlayConnection : IRtspHandler, IDisposable
         }
 
         var path = req.Uri.Split('?')[0];
+        if (_video?.Handle(req, _connection) is { } videoResponse)
+        {
+            if (videoResponse.Status >= 400) _log($"  << {videoResponse.Status} {videoResponse.Reason}");
+            return Task.FromResult(videoResponse);
+        }
         var response = (req.Method, path) switch
         {
             ("GET", "/info") => Info(req),
@@ -119,16 +137,16 @@ public sealed class AirPlayConnection : IRtspHandler, IDisposable
                 .ObjectForKey("qualifier") as NSArray;
             var first = qualifier is { Count: > 0 } ? qualifier[0].ToString() : null;
             if (first == "txtAirPlay")
-                dict.Add("txtAirPlay", new NSData(AirPlayServices.EncodeTxt(AirPlayServices.AirPlayTxt(_id))));
+                dict.Add("txtAirPlay", new NSData(AirPlayServices.EncodeTxt(AirPlayServices.AirPlayTxt(_id, _options.Features))));
             else if (first == "txtRAOP")
-                dict.Add("txtRAOP", new NSData(AirPlayServices.EncodeTxt(AirPlayServices.RaopTxt(_id))));
+                dict.Add("txtRAOP", new NSData(AirPlayServices.EncodeTxt(AirPlayServices.RaopTxt(_id, _options.Features))));
             return Plist(dict);
         }
 
         dict.Add("deviceID", new NSString(_id.DeviceId));
         dict.Add("macAddress", new NSString(_id.DeviceId));
         dict.Add("pk", new NSData(_id.Ed25519PublicKey));
-        dict.Add("features", new NSNumber((long)AirPlayServices.Features));
+        dict.Add("features", new NSNumber((long)_options.Features));
         dict.Add("name", new NSString(_id.Name));
         dict.Add("pi", new NSString(_id.PairingId.ToString()));
         dict.Add("vv", new NSNumber(2));
@@ -406,7 +424,8 @@ public sealed class AirPlayConnection : IRtspHandler, IDisposable
                     double.TryParse(line[7..].Trim(), NumberStyles.Float, CultureInfo.InvariantCulture, out var v))
                 {
                     Volume = v;
-                    _audio?.SetVolume(v);
+                    if (_audio is not null) _audio.SetVolume(v);
+                    else _video?.SetVolume(v); // AirPlay video: volume goes to the video player
                     _log($"     音量: {v:F1} dB");
                 }
             }

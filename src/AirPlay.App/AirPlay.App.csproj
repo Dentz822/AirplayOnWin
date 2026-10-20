@@ -44,11 +44,11 @@
     <CopyOutputSymbolsToPublishDirectory>false</CopyOutputSymbolsToPublishDirectory>
   </PropertyGroup>
 
-  <!-- Only avcodec, avutil, swscale and swresample are used; leave the other FFmpeg DLLs out. -->
+  <!-- Used: avcodec, avformat (HTTP/HLS for AirPlay video), avutil, swscale, swresample; leave the rest out. -->
   <Target Name="DropUnusedFFmpeg" AfterTargets="ComputeResolvedFilesToPublishList">
     <ItemGroup>
       <ResolvedFileToPublish Remove="@(ResolvedFileToPublish)"
-        Condition="'%(Filename)' == 'avformat-61' Or '%(Filename)' == 'avfilter-10' Or '%(Filename)' == 'avdevice-61' Or '%(Filename)' == 'postproc-58'" />
+        Condition="'%(Filename)' == 'avfilter-10' Or '%(Filename)' == 'avdevice-61' Or '%(Filename)' == 'postproc-58'" />
     </ItemGroup>
   </Target>
 

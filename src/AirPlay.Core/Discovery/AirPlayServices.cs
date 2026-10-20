@@ -14,23 +14,24 @@ public sealed class AirPlayServices : IDisposable
     public const ushort Port = 7000;
 
     // Feature bits (low 32, high 32): mirroring, audio, FairPlay, bit 27 = legacy pairing.
+    // AirPlay video adds bits 0 and 4 (see AirPlayVideoService.FeatureBits).
     public const ulong Features = 0x5A7FFEE6;
     public const string Model = "AppleTV3,2";
     public const string SourceVersion = "220.68";
-    private static readonly string FeaturesText = $"0x{Features & 0xFFFFFFFF:X},0x{Features >> 32:X}";
+    private static string FeaturesText(ulong features) => $"0x{features & 0xFFFFFFFF:X},0x{features >> 32:X}";
 
     private readonly List<DnsSdAdvertiser> _advertisers = new();
 
     public IReadOnlyList<string> ServiceNames => _advertisers.Select(a => a.ServiceName).ToList();
 
-    public static KeyValuePair<string, string>[] RaopTxt(DeviceIdentity id) =>
+    public static KeyValuePair<string, string>[] RaopTxt(DeviceIdentity id, ulong features = Features) =>
     [
         new("ch", "2"),            // stereo
         new("cn", "0,1,2,3"),      // codecs: PCM, ALAC, AAC, AAC-ELD
         new("da", "true"),
         new("et", "0,3,5"),        // encryption: none, FairPlay, FairPlay SAPv2.5
         new("vv", "2"),
-        new("ft", FeaturesText),
+        new("ft", FeaturesText(features)),
         new("am", Model),
         new("md", "0,1,2"),        // metadata: text, artwork, progress
         new("rhd", "5.6.0.0"),
@@ -46,10 +47,10 @@ public sealed class AirPlayServices : IDisposable
         new("pk", PublicKeyHex(id)),
     ];
 
-    public static KeyValuePair<string, string>[] AirPlayTxt(DeviceIdentity id) =>
+    public static KeyValuePair<string, string>[] AirPlayTxt(DeviceIdentity id, ulong features = Features) =>
     [
         new("deviceid", id.DeviceId),
-        new("features", FeaturesText),
+        new("features", FeaturesText(features)),
         new("pw", "false"),
         new("flags", "0x4"),
         new("model", Model),
@@ -75,15 +76,15 @@ public sealed class AirPlayServices : IDisposable
     private static string PublicKeyHex(DeviceIdentity id) =>
         Convert.ToHexString(id.Ed25519PublicKey).ToLowerInvariant();
 
-    public static async Task<AirPlayServices> StartAsync(DeviceIdentity id)
+    public static async Task<AirPlayServices> StartAsync(DeviceIdentity id, ulong features = Features)
     {
         var services = new AirPlayServices();
         try
         {
             services._advertisers.Add(await DnsSdAdvertiser.RegisterAsync(
-                $"{id.DeviceIdCompact}@{id.Name}", "_raop._tcp", Port, RaopTxt(id)));
+                $"{id.DeviceIdCompact}@{id.Name}", "_raop._tcp", Port, RaopTxt(id, features)));
             services._advertisers.Add(await DnsSdAdvertiser.RegisterAsync(
-                id.Name, "_airplay._tcp", Port, AirPlayTxt(id)));
+                id.Name, "_airplay._tcp", Port, AirPlayTxt(id, features)));
         }
         catch
         {

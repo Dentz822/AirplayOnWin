@@ -1,45 +1,29 @@
 using AirPlay.Core.Audio;
 using AirPlay.Core.Timing;
 using AirPlay.Media;
-using NAudio.CoreAudioApi;
-using NAudio.Wave;
 
 namespace AirPlay.App;
 
 /// <summary>
-/// Plays one AirPlay audio stream on the default Windows output device.
-/// Frames arrive in order (AudioStream reorders them) and are decoded straight into a small
-/// PCM buffer that WASAPI drains. The buffer is kept short so audio stays close to the video;
-/// if it grows (sender clock slightly faster than the sound card), it is trimmed.
+/// Plays one AirPlay audio stream (mirroring sound or music): frames arrive in order
+/// (AudioStream reorders them), are decoded and sent to the speakers with a short buffer,
+/// trimmed if it grows (sender clock slightly faster than the sound card).
 /// </summary>
 public sealed class AudioPlayer : IAudioSink
 {
-    private static readonly TimeSpan TargetLatency = TimeSpan.FromMilliseconds(100);
-    private static readonly TimeSpan MaxLatency = TimeSpan.FromMilliseconds(400);
-    /// <summary>WASAPI buffer (40 ms) plus device/resampler delay: time from leaving our buffer to the speaker.</summary>
-    private const long OutputLatencyNs = 50_000_000;
-
     private readonly AudioDecoder _decoder;
-    private readonly BufferedWaveProvider _buffer;
-    private readonly WasapiOut _output;
-    private readonly Action<string> _log;
+    private readonly PcmOutput _output;
     private readonly PlaybackClock? _clock;
-    private bool _playing;
-    private long _frames, _trims;
+    private readonly Action<string> _log;
+    private long _frames;
 
     public AudioPlayer(AudioFormat format, PlaybackClock? clock, Action<string> log)
     {
         _log = log;
         _clock = clock;
         _decoder = new AudioDecoder(format.CompressionType);
-        _buffer = new BufferedWaveProvider(new WaveFormat(AudioDecoder.SampleRate, 16, AudioDecoder.Channels))
-        {
-            BufferDuration = TimeSpan.FromSeconds(2),
-            DiscardOnBufferOverflow = true,
-            ReadFully = true, // play silence while waiting instead of stopping
-        };
-        _output = new WasapiOut(AudioClientShareMode.Shared, useEventSync: true, latency: 40);
-        _output.Init(_buffer);
+        _output = new PcmOutput(clock, startAfter: TimeSpan.FromMilliseconds(100), maxBuffered: TimeSpan.FromMilliseconds(400),
+            capacity: TimeSpan.FromSeconds(2), log);
         _log($"     音訊播放: {format.CodecName} → 預設喇叭");
     }
 
@@ -52,47 +36,17 @@ public sealed class AudioPlayer : IAudioSink
             return;
         }
         _frames++;
-
-        if (_buffer.BufferedDuration > MaxLatency)
-        {
-            _buffer.ClearBuffer(); // fell behind: jump back to live
-            _trims++;
-        }
-        _buffer.AddSamples(pcm.ToArray(), 0, pcm.Length);
-
-        // Start after a short pre-buffer so network jitter doesn't cause gaps.
-        if (!_playing && _buffer.BufferedDuration >= TargetLatency)
-        {
-            _output.Play();
-            _playing = true;
-            _log("     開始播放聲音");
-        }
-
-        // Tell the clock which moment is audible now: this frame ends `buffered` + output latency
-        // from now, so the speaker is currently playing (frame end − that delay).
-        if (_playing && _clock?.AudioRtpToRemoteNanos(rtpTimestamp) is long frameStartNs)
-        {
-            var frameNs = pcm.Length / (2 * AudioDecoder.Channels) * 1_000_000_000L / AudioDecoder.SampleRate;
-            var aheadNs = (long)(_buffer.BufferedDuration.TotalMilliseconds * 1_000_000) + OutputLatencyNs;
-            _clock.ReportAudible(frameStartNs + frameNs - aheadNs);
-        }
+        _output.Add(pcm, _clock?.AudioRtpToRemoteNanos(rtpTimestamp));
     }
 
-    /// <summary>AirPlay volume: 0 dB = full, -30 dB = quietest, -144 = mute.</summary>
-    public void SetVolume(double db)
-    {
-        var gain = db <= -144 ? 0f : (float)Math.Clamp(Math.Pow(10, db / 20), 0, 1);
-        try { _output.Volume = gain; }
-        catch (Exception ex) { _log($"     無法設定音量: {ex.Message}"); }
-    }
+    public void SetVolume(double db) => _output.SetVolume(db);
 
-    public void Flush() => _buffer.ClearBuffer();
+    public void Flush() => _output.Flush();
 
     public void Dispose()
     {
-        _output.Stop();
         _output.Dispose();
         _decoder.Dispose();
-        _log($"     音訊播放結束: {_frames} 幀, 解碼錯誤 {_decoder.Errors}, 追趕 {_trims} 次");
+        _log($"     音訊播放結束: {_frames} 幀, 解碼錯誤 {_decoder.Errors}, 追趕 {_output.Trims} 次");
     }
 }

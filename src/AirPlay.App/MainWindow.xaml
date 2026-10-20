@@ -49,7 +49,7 @@
                 <TextBlock x:Name="TrackDuration" Foreground="#909090" FontSize="12" HorizontalAlignment="Right" />
             </Grid>
             <TextBlock x:Name="MusicHint" Foreground="#606060" FontSize="12" TextAlignment="Center" TextWrapping="Wrap"
-                       Margin="0,18,0,0" Text="只有聲音？影片類 App 請改用「螢幕鏡像輸出」，或等 App 影片播放功能完成。" />
+                       Margin="0,18,0,0" Text="只有聲音？這個 App 可能只送聲音，或影片有版權保護（DRM）。可以改用「螢幕鏡像輸出」。" />
         </StackPanel>
 
         <StackPanel x:Name="Waiting" VerticalAlignment="Center" HorizontalAlignment="Center" Margin="24">

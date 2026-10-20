@@ -19,6 +19,7 @@ public partial class MainWindow : Window
     private readonly AppSettings _settings;
     private readonly FrameQueue _frames = new();
     private readonly TrayIcon _tray;
+    private readonly VideoPlaybackHost _videoHost;
     private PlaybackClock? _activeClock;
     private AirPlayReceiver? _receiver;
     private DeviceIdentity? _identity;
@@ -44,6 +45,16 @@ public partial class MainWindow : Window
         InitializeComponent();
         Topmost = settings.AlwaysOnTop;
         _tray = new TrayIcon(ShowFromBackground, RequestExit);
+        _videoHost = new VideoPlaybackHost(_frames, Log, (clock, active) => Dispatcher.BeginInvoke(() =>
+        {
+            _activeClock = clock;
+            if (active)
+            {
+                Status.Text = "AirPlay 影片";
+                ShowFromBackground();
+            }
+            OnSessionActiveChanged(active);
+        }));
         if (startMinimized) WindowState = WindowState.Minimized;
 
         Closing += OnClosing;
@@ -107,6 +118,7 @@ public partial class MainWindow : Window
                     return new AudioPlayer(format, clock, Log);
                 },
                 NowPlayingChanged = np => Dispatcher.BeginInvoke(() => OnNowPlaying(np)),
+                VideoPlayer = _videoHost,
                 ClientConnected = (client, model) => Dispatcher.BeginInvoke(() => OnClientConnected(client)),
             }, Log);
             await _receiver.StartAsync();
@@ -167,6 +179,7 @@ public partial class MainWindow : Window
         e.Cancel = true;
         Hide();
         _tray.Dispose();
+        _videoHost.Stop();
         if (_receiver is not null) await _receiver.DisposeAsync();
         _closingDone = true;
         Close();

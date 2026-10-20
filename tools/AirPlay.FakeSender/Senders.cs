@@ -23,9 +23,18 @@ internal sealed class RtspClient : IDisposable
         _stream = _tcp.GetStream();
     }
 
-    public async Task<(int Status, byte[] Body)> Send(string method, string uri, byte[]? body = null, string? contentType = null)
+    public Task<(int Status, byte[] Body)> Send(string method, string uri, byte[]? body = null, string? contentType = null) =>
+        SendRaw(method, uri, body, contentType, null);
+
+    /// <summary>HTTP/1.1 request with X-Apple-Session-ID (the AirPlay video requests).</summary>
+    public Task<(int Status, byte[] Body)> SendWithSession(string method, string uri, byte[]? body, string? contentType, string sessionId) =>
+        SendRaw(method, uri, body, contentType, sessionId);
+
+    private async Task<(int Status, byte[] Body)> SendRaw(string method, string uri, byte[]? body, string? contentType, string? sessionId)
     {
-        var head = new StringBuilder($"{method} {uri} RTSP/1.0\r\nCSeq: {_cseq++}\r\nUser-Agent: AirPlay/960.13.1\r\n");
+        var protocol = sessionId is null ? "RTSP/1.0" : "HTTP/1.1";
+        var head = new StringBuilder($"{method} {uri} {protocol}\r\nCSeq: {_cseq++}\r\nUser-Agent: AirPlay/960.13.1\r\n");
+        if (sessionId is not null) head.Append($"X-Apple-Session-ID: {sessionId}\r\n");
         if (contentType is not null) head.Append($"Content-Type: {contentType}\r\n");
         if (body is not null) head.Append($"Content-Length: {body.Length}\r\n");
         head.Append("\r\n");

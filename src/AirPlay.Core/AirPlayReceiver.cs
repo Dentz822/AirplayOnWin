@@ -28,15 +28,18 @@ public sealed class AirPlayReceiver : IAsyncDisposable
 
     public async Task StartAsync()
     {
+        var video = _options.VideoPlayer is { } player
+            ? new Video.AirPlayVideoService(player, AirPlayServices.Port, _log)
+            : null;
         var server = new RtspServer(AirPlayServices.Port,
-            conn => new AirPlayConnection(Identity, _options, conn, _log), _log);
+            conn => new AirPlayConnection(Identity, _options, conn, _log, video), _log);
         // Run on the thread pool: if StartAsync is called from a UI thread, the server's async
         // continuations must not be queued onto it (that would also deadlock blocking cleanup).
         _serverTask = Task.Run(() => server.RunAsync(_cts.Token));
         await Task.WhenAny(_serverTask, Task.Delay(200));
         if (_serverTask.IsFaulted) await _serverTask; // e.g. port 7000 already in use
 
-        _services = await AirPlayServices.StartAsync(Identity);
+        _services = await AirPlayServices.StartAsync(Identity, _options.Features);
         foreach (var s in _services.ServiceNames) _log($"mDNS 已廣播: {s}");
     }
 

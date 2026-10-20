@@ -26,6 +26,11 @@ public sealed class RtspResponse
     public byte[] Body { get; set; } = [];
     /// <summary>Close the connection after sending.</summary>
     public bool Disconnect { get; set; }
+    /// <summary>
+    /// After sending, hand the connection over (e.g. "101 Switching Protocols" to reverse HTTP);
+    /// the request/response loop ends and the connection closes when this task completes.
+    /// </summary>
+    public Func<Stream, CancellationToken, Task>? TakeOver { get; set; }
 
     public static RtspResponse Error(int status, string reason) => new() { Status = status, Reason = reason };
 

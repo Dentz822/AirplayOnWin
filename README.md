@@ -18,6 +18,18 @@
 | 9 | 產品化：設定、重新命名、開機啟動、系統匣、防火牆一鍵設定、30/60 fps、圖示 | ✅ |
 | 10 | 產生可直接執行的 .exe（不需安裝 .NET） | ✅ `dist\WindowsAirplay.exe`，約 106 MB |
 
+## 支援的 AirPlay 方式
+
+| iPhone 上的操作 | 效果 |
+|---|---|
+| 控制中心 →「螢幕鏡像輸出」 | 整個手機畫面＋聲音（所有 App 都可以） |
+| App 裡的 AirPlay 按鈕：**YouTube** | 電腦直接播放影片（可暫停、拖曳進度），最高選 1080p H.264 |
+| App 裡的 AirPlay 按鈕：**Safari 網頁影片** | 電腦直接播放影片網址（HLS / MP4） |
+| App 裡的 AirPlay 按鈕：**音樂 App** | 播放聲音，視窗顯示封面、歌名、歌手、進度 |
+| App 裡的 AirPlay 按鈕：**Netflix、Disney+、Apple TV+ 等** | ✗ 這些影片有 DRM（FairPlay）版權保護，只有 Apple 裝置能播放，請改用「螢幕鏡像輸出」 |
+
+YouTube 直播（沒有結尾的播放清單）目前不支援。
+
 ## 執行檔
 
 ```powershell
@@ -73,10 +85,14 @@ dotnet run --project src\AirPlay.App -- --play recordings\mirror-xxx.h264   # �
 dotnet test
 ```
 
-模擬 iPhone（不需手機，對執行中的接收端跑完整協定，畫面用錄影檔、聲音用 AAC 測試音）：
+模擬 iPhone（不需手機，對執行中的接收端跑完整協定）：
 ```powershell
-dotnet run --project tools\AirPlay.FakeSender -- recordings\mirror-xxx.h264 --seconds 8 --volume -25
+dotnet run --project tools\AirPlay.FakeSender -- recordings\mirror-xxx.h264 --seconds 8 --volume -25   # 螢幕鏡像（錄影檔＋測試音）
+dotnet run --project tools\AirPlay.FakeSender -- recordings\mirror-xxx.h264 --audio-only --cover a.png # 音樂模式（歌曲資訊＋封面）
+dotnet run --project tools\AirPlay.FakeSender -- --video-url --seconds 20   # AirPlay 影片：Safari 網址
+dotnet run --project tools\AirPlay.FakeSender -- --youtube --seconds 20     # AirPlay 影片：YouTube（FCUP＋壓縮清單）
 ```
+影片模式會自己產生測試影片並開一個小網頁伺服器，然後測試播放、暫停、繼續、拖曳、停止。
 測試用模擬的 iPhone 跑完 `/info`、配對、FairPlay、時間同步和畫面串流，用 NIST 測試向量驗證 AES-CTR，並用 FFmpeg 編碼的影片與聲音驗證解碼（ALAC 無損比對、AAC 頻率檢查）。
 
 ## 專案結構
@@ -91,6 +107,10 @@ src/AirPlay.Core/
   Crypto/AesCtr.cs              連續的 AES-128-CTR（配對與畫面解密共用）
   Timing/NtpClient.cs           與 iPhone 的 NTP 時間同步
   Timing/PlaybackClock.cs       影音同步：把畫面與聲音的時間戳換到同一條時間軸
+  Metadata/NowPlaying.cs        音樂模式的歌曲資訊（DMAP）與進度
+  Video/AirPlayVideoService.cs  AirPlay 影片：/play、FCUP、/playback-info、暫停/拖曳/停止
+  Video/HlsPlaylist.cs          HLS 清單：選畫質與音軌、展開 YouTube 壓縮清單
+  Video/ReverseChannel.cs       反向 HTTP（PTTH）連線
   Mirroring/MirrorStream.cs     畫面串流：接收、解密、AVCC 轉 Annex-B
   Audio/AudioStream.cs          音訊串流：AES-CBC 解密、依序號重排、遺失時請 iPhone 補送
   Net/PortBinder.cs             以獨占方式綁定連接埠（避免被其他程式搶走封包）
@@ -102,6 +122,7 @@ src/AirPlay.Media/
   AnnexBReader.cs               把錄影檔切回一幀一幀
   AudioDecoder.cs               FFmpeg 解碼 AAC-ELD / AAC / ALAC 成 16-bit PCM
   FrameQueue.cs                 解碼好的畫面排隊，等到該播放的時間才顯示
+  UrlPlayer.cs                  FFmpeg 播放影片網址（HLS / MP4，HTTPS）：解碼、暫停、精準跳轉
 src/AirPlay.App/                視窗版（WPF，輸出 WindowsAirplay.exe）：即時顯示、全螢幕、聲音播放（NAudio WASAPI）、
                                 設定、系統匣、開機啟動、防火牆設定
 src/AirPlay.Cli/                開發用主控台程式（含 .h264 錄影）

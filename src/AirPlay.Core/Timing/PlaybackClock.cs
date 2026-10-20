@@ -16,13 +16,24 @@ public sealed class PlaybackClock
 {
     public const int AudioSampleRate = 44100;
     private const long SecondsFrom1900To1970 = 2_208_988_800L;
-    private static readonly long AudioStaleAfterTicks = Stopwatch.Frequency / 2; // 500 ms
+    private readonly long? _staleAfterTicks;
 
     private readonly object _lock = new();
     private (uint Rtp, long RemoteNs)? _sync;
     private long _audibleRemoteNs;
     private long _audibleAtTicks;
     private bool _hasAudible;
+    private bool _paused;
+
+    /// <param name="staleAfter">
+    /// Live mirroring: if the audio player stops reporting for this long, audio is considered gone
+    /// and video is shown as soon as it is decoded (default 500 ms). Null = never (video playback,
+    /// where reports pause while the read-ahead buffer is full but the speaker keeps playing).
+    /// </param>
+    public PlaybackClock(TimeSpan? staleAfter = null, bool neverStale = false)
+    {
+        _staleAfterTicks = neverStale ? null : (long)((staleAfter ?? TimeSpan.FromMilliseconds(500)).TotalSeconds * Stopwatch.Frequency);
+    }
 
     /// <summary>NTP Q32.32 → nanoseconds, without overflowing for times past 2^31 s.</summary>
     public static long NtpToNanos(ulong q32) =>
@@ -71,9 +82,23 @@ public sealed class PlaybackClock
         lock (_lock)
         {
             if (!_hasAudible) return null;
+            if (_paused) return _audibleRemoteNs; // frozen while paused
             var elapsed = Stopwatch.GetTimestamp() - _audibleAtTicks;
-            if (elapsed > AudioStaleAfterTicks) return null;
+            if (elapsed > _staleAfterTicks) return null;
             return _audibleRemoteNs + elapsed * 1_000_000_000L / Stopwatch.Frequency;
+        }
+    }
+
+    /// <summary>Pause freezes the audible time (video stops advancing); resume continues from it.</summary>
+    public void SetPaused(bool paused)
+    {
+        lock (_lock)
+        {
+            if (_paused == paused) return;
+            if (paused && _hasAudible)
+                _audibleRemoteNs += (Stopwatch.GetTimestamp() - _audibleAtTicks) * 1_000_000_000L / Stopwatch.Frequency;
+            _audibleAtTicks = Stopwatch.GetTimestamp();
+            _paused = paused;
         }
     }
 
@@ -83,6 +108,7 @@ public sealed class PlaybackClock
         lock (_lock)
         {
             _hasAudible = false;
+            _paused = false;
             _sync = null;
         }
     }
