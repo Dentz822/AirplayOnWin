@@ -16,6 +16,13 @@ public partial class App : Application
     {
         base.OnStartup(e);
 
+        // Elevated helper copy started by "設定防火牆…": create the rules and exit, no window.
+        if (e.Args.Length > 0 && e.Args[0] == FirewallSetup.SetupArgument)
+        {
+            Shutdown(FirewallSetup.RunElevated(e.Args.ElementAtOrDefault(1)));
+            return;
+        }
+
         // Only one receiver per PC (port 7000 and the mDNS name). A second launch just brings
         // the running one to the front.
         _singleInstance = new Mutex(true, InstanceName, out var isFirst);

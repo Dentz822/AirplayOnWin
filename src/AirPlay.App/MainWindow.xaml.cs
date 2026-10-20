@@ -256,9 +256,14 @@ public partial class MainWindow : Window
     private async void Firewall_Click(object sender, RoutedEventArgs e)
     {
         Log("設定防火牆（UAC）");
-        var ok = await Task.Run(FirewallSetup.CreateRules);
-        Log(ok ? "防火牆規則已建立" : "防火牆設定取消或失敗");
-        if (!ok) MessageBox.Show(this, "防火牆沒有設定成功（可能按了「否」）。", "WindowsAirplay");
+        var error = await Task.Run(FirewallSetup.CreateRules);
+        Log(error is null ? "防火牆規則已建立" : $"防火牆設定失敗: {error}");
+        if (error is not null)
+            MessageBox.Show(this,
+                $"防火牆沒有設定成功：\n{error}\n\n" +
+                "也可以手動設定：Windows 安全性 → 防火牆與網路保護 → 允許應用程式通過防火牆，" +
+                "把 WindowsAirplay 勾選「私人」。",
+                "WindowsAirplay");
         CheckFirewall();
     }
 
