@@ -44,7 +44,9 @@ public sealed class RtspResponse
     {
         var sb = new StringBuilder($"{protocol} {Status} {Reason}\r\n");
         foreach (var (k, v) in Headers) sb.Append($"{k}: {v}\r\n");
-        sb.Append($"Content-Length: {Body.Length}\r\n\r\n");
+        // 1xx responses (101 Switching Protocols for WebSocket / reverse HTTP) carry no body.
+        if (Status >= 200) sb.Append($"Content-Length: {Body.Length}\r\n");
+        sb.Append("\r\n");
         var head = Encoding.ASCII.GetBytes(sb.ToString());
         var result = new byte[head.Length + Body.Length];
         head.CopyTo(result, 0);

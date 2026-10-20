@@ -32,6 +32,7 @@
 
   <ItemGroup>
     <PackageReference Include="NAudio.Wasapi" Version="2.2.1" />
+    <PackageReference Include="QRCoder" Version="1.8.0" />
   </ItemGroup>
 
   <!-- Publishing: one self-contained WindowsAirplay.exe (see scripts\publish.ps1) -->
@@ -47,8 +48,7 @@
   <!-- Used: avcodec, avformat (HTTP/HLS for AirPlay video), avutil, swscale, swresample; leave the rest out. -->
   <Target Name="DropUnusedFFmpeg" AfterTargets="ComputeResolvedFilesToPublishList">
     <ItemGroup>
-      <ResolvedFileToPublish Remove="@(ResolvedFileToPublish)"
-        Condition="'%(Filename)' == 'avfilter-10' Or '%(Filename)' == 'avdevice-61' Or '%(Filename)' == 'postproc-58'" />
+      <ResolvedFileToPublish Remove="@(ResolvedFileToPublish)" Condition="'%(Filename)' == 'avfilter-10' Or '%(Filename)' == 'avdevice-61' Or '%(Filename)' == 'postproc-58'" />
     </ItemGroup>
   </Target>
 

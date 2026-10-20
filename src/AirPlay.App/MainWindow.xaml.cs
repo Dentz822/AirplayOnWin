@@ -8,6 +8,7 @@ using System.Windows.Media.Imaging;
 using AirPlay.Core;
 using AirPlay.Core.Identity;
 using AirPlay.Core.Metadata;
+using AirPlay.App.PcAudio;
 using AirPlay.Core.Timing;
 using AirPlay.Media;
 
@@ -20,6 +21,7 @@ public partial class MainWindow : Window
     private readonly FrameQueue _frames = new();
     private readonly TrayIcon _tray;
     private readonly VideoPlaybackHost _videoHost;
+    private readonly PcAudioShare _pcAudio;
     private PlaybackClock? _activeClock;
     private AirPlayReceiver? _receiver;
     private DeviceIdentity? _identity;
@@ -45,6 +47,12 @@ public partial class MainWindow : Window
         InitializeComponent();
         Topmost = settings.AlwaysOnTop;
         _tray = new TrayIcon(ShowFromBackground, RequestExit);
+        if (string.IsNullOrEmpty(settings.ShareToken))
+        {
+            settings.ShareToken = PcAudioShare.NewToken();
+            settings.Save();
+        }
+        _pcAudio = new PcAudioShare(settings.ShareToken, Core.Discovery.AirPlayServices.Port, Log) { Enabled = settings.ShareAudio };
         _videoHost = new VideoPlaybackHost(_frames, Log, (clock, active) => Dispatcher.BeginInvoke(() =>
         {
             _activeClock = clock;
@@ -119,6 +127,7 @@ public partial class MainWindow : Window
                 },
                 NowPlayingChanged = np => Dispatcher.BeginInvoke(() => OnNowPlaying(np)),
                 VideoPlayer = _settings.AppVideo ? _videoHost : null,
+                ExtraHttpHandler = _pcAudio.Handle,
                 ClientConnected = (client, model) => Dispatcher.BeginInvoke(() => OnClientConnected(client)),
             }, Log);
             await _receiver.StartAsync();
@@ -181,6 +190,7 @@ public partial class MainWindow : Window
         _tray.Dispose();
         _videoHost.Stop();
         if (_receiver is not null) await _receiver.DisposeAsync();
+        _pcAudio.Dispose();
         _closingDone = true;
         Close();
     }
@@ -507,6 +517,9 @@ public partial class MainWindow : Window
         _settings.CloseToTray = CloseToTrayItem.IsChecked;
         _settings.Save();
     }
+
+    private void ShareAudio_Click(object sender, RoutedEventArgs e) =>
+        new ShareAudioWindow(_pcAudio, _settings) { Owner = this }.Show();
 
     private void OpenLogs_Click(object sender, RoutedEventArgs e) =>
         Process.Start(new ProcessStartInfo("explorer.exe", $"\"{FileLog.DefaultDirectory}\"") { UseShellExecute = true });

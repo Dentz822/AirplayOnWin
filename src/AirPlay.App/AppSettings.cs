@@ -17,6 +17,10 @@ public sealed class AppSettings
     /// buttons give sound only.
     /// </summary>
     public bool AppVideo { get; set; } = true;
+    /// <summary>Phones may listen to the PC's sound (web page on the AirPlay port).</summary>
+    public bool ShareAudio { get; set; }
+    /// <summary>Random part of the listening address, so it can't be guessed.</summary>
+    public string? ShareToken { get; set; }
 
     private static string FilePath => Path.Combine(
         Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "WindowsAirplay", "settings.json");

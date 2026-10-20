@@ -19,6 +19,7 @@
                 </MenuItem>
                 <MenuItem x:Name="AppVideoItem" Header="App 影片直接播放（YouTube、Twitch、Safari）" IsCheckable="True" Click="AppVideo_Click"
                           ToolTip="開啟：App 的 AirPlay 按鈕由電腦直接播放影片；鏡像中開這些影片時，iPhone 會自動切成影片模式。&#x0a;關閉：永遠鏡像整個手機畫面；App 的 AirPlay 按鈕只有聲音。" />
+                <MenuItem Header="讓手機收聽電腦聲音…" Click="ShareAudio_Click" />
                 <MenuItem x:Name="AutoStartItem" Header="開機時自動啟動" IsCheckable="True" Click="AutoStart_Click" />
                 <MenuItem x:Name="CloseToTrayItem" Header="關閉視窗時縮到系統匣" IsCheckable="True" Click="CloseToTray_Click" />
                 <MenuItem Header="設定防火牆…" Click="Firewall_Click" />

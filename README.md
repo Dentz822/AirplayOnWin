@@ -35,6 +35,19 @@ YouTube 直播（沒有結尾的播放清單）目前不支援。
 這是 iOS 的行為，接收端無法拒絕（拒絕的話 iPhone 仍會結束鏡像）。想永遠鏡像整個畫面，請在右鍵選單關閉「App 影片直接播放」
 （代價：App 裡的 AirPlay 按鈕只會有聲音）。
 
+## 讓手機收聽電腦的聲音
+
+反方向：把 Windows 正在播放的聲音送到 iPhone（例如戴耳機用手機聽電腦）。
+
+1. 視窗按右鍵 →「讓手機收聽電腦聲音…」，勾選「允許手機收聽電腦的聲音」（預設關閉）。
+2. 用 iPhone 相機掃描視窗上的 QR code，Safari 會打開網頁，按「開始收聽」。
+
+- 不需要裝 App，也不需要新的防火牆規則（使用同一個連接埠 7000）。延遲約 0.1～0.2 秒。
+- **不會回音**：Windows 11 會排除本程式自己播放的聲音，所以 iPhone 投影到電腦的聲音不會被送回手機。
+- 網址含隨機代碼，同一個 Wi-Fi 的其他人猜不到；可以在視窗裡「更換網址」讓舊連結失效。
+- 只有在有手機收聽時才會擷取電腦聲音。iPhone 鎖定螢幕或切到其他 App 時，Safari 會停止播放。
+- 電腦本身照樣會出聲；只想用手機聽的話，可以把電腦喇叭關小。
+
 ## 執行檔
 
 ```powershell
@@ -66,6 +79,7 @@ powershell -ExecutionPolicy Bypass -File scripts\publish.ps1
 | 開機時自動啟動 | 登入 Windows 時自動啟動（縮小） |
 | 關閉視窗時縮到系統匣 | 開啟後按 X 只是隱藏，iPhone 仍可連線；從系統匣圖示結束。預設關閉：按 X 就完全結束 |
 | App 影片直接播放 | App 的 AirPlay 按鈕（YouTube、Twitch、Safari）由電腦直接播放影片；鏡像中開這些影片會自動切成影片模式。關閉後永遠鏡像整個畫面，App 的 AirPlay 按鈕只有聲音 |
+| 讓手機收聽電腦聲音… | 把電腦的聲音送到 iPhone Safari（QR code、開關、更換網址） |
 | 設定防火牆… | 一鍵建立防火牆規則（會跳出系統管理員確認）。沒設定時視窗也會提示 |
 
 - 完全結束程式時會先停止 mDNS 廣播，iPhone 清單裡就不會再出現這台電腦。
@@ -133,6 +147,7 @@ src/AirPlay.Media/
   UrlPlayer.cs                  FFmpeg 播放影片網址（HLS / MP4，HTTPS）：解碼、暫停、精準跳轉
 src/AirPlay.App/                視窗版（WPF，輸出 WindowsAirplay.exe）：即時顯示、全螢幕、聲音播放（NAudio WASAPI）、
                                 設定、系統匣、開機啟動、防火牆設定
+  PcAudio/                      讓手機收聽電腦聲音：排除自己的擷取（process loopback）、WebSocket、Safari 網頁
 src/AirPlay.Cli/                開發用主控台程式（含 .h264 錄影）
 native/playfair/                FairPlay C 程式（取自 UxPlay，GPL）；bin/playfair.dll 為預先編好的版本
 tests/AirPlay.Tests/            自動測試
@@ -149,7 +164,7 @@ scripts/setup-firewall.ps1      防火牆設定
 - `native/playfair/src/` 的 FairPlay 程式取自 [UxPlay](https://github.com/FDH2/UxPlay)（GPL-3.0），未修改。
 - `native/playfair/fairplay_export.c` 改寫自 UxPlay 的 `fairplay_playfair.c`（© 2018 Juho Vähä-Herttua，LGPL-2.1+）。
 - AirPlay 協定的流程與參數參考 UxPlay、RPiPlay 的實作，C# 程式為重新撰寫。
-- 使用的 NuGet 套件：BouncyCastle.Cryptography（MIT）、plist-cil（MIT）、FFmpeg.AutoGen（LGPL-3.0）、NAudio.Wasapi（MIT）、Sdcb.FFmpeg.runtime.windows-x64（FFmpeg 7.1 DLL，GPL-3.0）、xunit（Apache-2.0）。
+- 使用的 NuGet 套件：BouncyCastle.Cryptography（MIT）、plist-cil（MIT）、FFmpeg.AutoGen（LGPL-3.0）、NAudio.Wasapi（MIT）、QRCoder（MIT）、Sdcb.FFmpeg.runtime.windows-x64（FFmpeg 7.1 DLL，GPL-3.0）、xunit（Apache-2.0）。
 
 ## 聲明
 

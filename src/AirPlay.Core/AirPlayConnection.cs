@@ -27,6 +27,12 @@ public sealed class ReceiverOptions
     public Func<PlaybackClock, IMirrorSink>? MirrorSinkFactory { get; init; }
     /// <summary>Creates a player for each audio stream (null = receive and discard).</summary>
     public Func<AudioFormat, PlaybackClock, IAudioSink>? AudioSinkFactory { get; init; }
+    /// <summary>
+    /// Extra HTTP endpoints served on the AirPlay port (e.g. the "listen to the PC" page);
+    /// return null for requests it doesn't handle.
+    /// </summary>
+    public Func<RtspRequest, RtspConnectionInfo, RtspResponse?>? ExtraHttpHandler { get; init; }
+
     /// <summary>Called when an iPhone starts a session: (device name, model).</summary>
     public Action<string, string>? ClientConnected { get; init; }
     /// <summary>Plays AirPlay video (app AirPlay button); null = mirroring and audio only.</summary>
@@ -98,6 +104,8 @@ public sealed class AirPlayConnection : IRtspHandler, IDisposable
         }
 
         var path = req.Uri.Split('?')[0];
+        if (_options.ExtraHttpHandler?.Invoke(req, _connection) is { } extraResponse)
+            return Task.FromResult(extraResponse);
         if (_video?.Handle(req, _connection) is { } videoResponse)
         {
             if (videoResponse.Status >= 400) _log($"  << {videoResponse.Status} {videoResponse.Reason}");
